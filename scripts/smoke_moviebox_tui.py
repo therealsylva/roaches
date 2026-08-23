@@ -117,12 +117,13 @@ def main() -> int:
                 if not audio_selected and "Choose an audio track to load streams." in screen:
                     os.write(fd, b"\r")
                     audio_selected = True
-                stream_match = re.search(
-                    r"(?:Streams\s*)?[^\n]*\s*·\s*([1-9][0-9]*) available\s*·\s*1/",
-                    screen,
-                )
-                if stream_match:
-                    print(f"LIVE_RESOURCE_OK streams={stream_match.group(1)}")
+                stream_match = re.search(r"\b([1-9][0-9]*)\s+available\b", screen)
+                qualities = [quality for quality in ("2160p", "1080p", "720p", "480p", "360p") if quality in screen]
+                if stream_match and qualities:
+                    print(
+                        f"LIVE_RESOURCE_OK streams={stream_match.group(1)} "
+                        f"qualities={','.join(qualities)}"
+                    )
                     return 0
 
         print("LIVE_RESOURCE_FAILED no verified stream list before timeout", file=sys.stderr)
