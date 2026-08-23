@@ -90,7 +90,7 @@ internal class MovieBoxApi(
         return request(
             "GET",
             "/wefeed-mobile-bff/subject-api/resource?subjectId=${encode(subjectId)}" +
-                "$episodeQuery&page=$page&perPage=50",
+                "$episodeQuery&page=$page&perPage=20",
         )
     }
 

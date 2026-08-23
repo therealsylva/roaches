@@ -156,7 +156,7 @@ def main() -> int:
         season_episode = f"&se={season}&ep={episode}"
     resources, _ = request(
         "GET",
-        f"/wefeed-mobile-bff/subject-api/resource?subjectId={subject_id}{season_episode}&page=1&perPage=50",
+        f"/wefeed-mobile-bff/subject-api/resource?subjectId={subject_id}{season_episode}&page=1&perPage=20",
         token=token,
     )
     streams = resources.get("list", resources if isinstance(resources, list) else [])
