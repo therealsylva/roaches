@@ -111,15 +111,39 @@ def main() -> int:
         {"keyword": "Dune", "page": 1, "perPage": 20, "subjectType": "All", "tabId": "All"},
         token,
     )
-    subjects = search.get("results", [{}])[0].get("subjects", [])
-    dune = next((item for item in subjects if item.get("subjectId") and "dune" in item.get("title", "").lower()), None)
+    subjects = [
+        item
+        for group in search.get("results", [])
+        for item in group.get("subjects", [])
+    ]
+    dune = next(
+        (
+            item
+            for item in subjects
+            if item.get("subjectId") and "dune" in item.get("title", "").lower()
+        ),
+        None,
+    )
     if dune is None:
         raise RuntimeError("live search returned no Dune title")
     subject_id = urllib.parse.quote(dune["subjectId"])
     details, token = request("GET", f"/wefeed-mobile-bff/subject-api/get?subjectId={subject_id}", token=token)
+    season_episode = ""
+    subject_type = int(details.get("subjectType", details.get("stype", 1)))
+    if subject_type == 2:
+        seasons, token = request(
+            "GET",
+            f"/wefeed-mobile-bff/subject-api/season-info?subjectId={subject_id}",
+            token=token,
+        )
+        season_list = seasons.get("seasons", seasons.get("list", [])) if isinstance(seasons, dict) else seasons
+        first_season = season_list[0] if season_list else {}
+        season = int(first_season.get("se", first_season.get("season", 1)))
+        episode = 1
+        season_episode = f"&se={season}&ep={episode}"
     resources, _ = request(
         "GET",
-        f"/wefeed-mobile-bff/subject-api/resource?subjectId={subject_id}&page=1&perPage=50",
+        f"/wefeed-mobile-bff/subject-api/resource?subjectId={subject_id}{season_episode}&page=1&perPage=50",
         token=token,
     )
     streams = resources.get("list", resources if isinstance(resources, list) else [])

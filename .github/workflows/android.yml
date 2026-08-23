@@ -52,15 +52,15 @@ jobs:
           test "$(grep -c '^permission:' permissions.txt)" -le 3
           ! grep -Eiq 'AD_ID|READ_CONTACTS|ACCESS_FINE_LOCATION|QUERY_ALL_PACKAGES' permissions.txt
 
-      - name: Verify live catalogue and streams
-        run: python3 scripts/live_api_smoke.py
-
       - uses: actions/upload-artifact@v4
         with:
           name: roaches-debug-apk
           path: app/build/outputs/apk/debug/roaches-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Verify live catalogue and streams
+        run: python3 scripts/live_api_smoke.py
 
       - uses: actions/upload-artifact@v4
         if: always()
