@@ -73,6 +73,7 @@ def main() -> int:
     result_seen_at = 0.0
     moved_to_movie = False
     details_opened = False
+    audio_selected = False
 
     try:
         while time.monotonic() < deadline:
@@ -113,6 +114,9 @@ def main() -> int:
 
             if details_opened:
                 screen = sanitized_screen(bytes(raw))
+                if not audio_selected and "Choose an audio track to load streams." in screen:
+                    os.write(fd, b"\r")
+                    audio_selected = True
                 stream_match = re.search(r"Streams\s*·\s*([1-9][0-9]*) available", screen)
                 if stream_match:
                     print(f"LIVE_RESOURCE_OK streams={stream_match.group(1)}")
