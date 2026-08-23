@@ -9,5 +9,6 @@ captures/
 *.jks
 *.keystore
 artifacts/
+dist/
 __pycache__/
 *.py[cod]

@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build, audit and live provider smoke
+    name: Build, audit and package APK
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -59,9 +59,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Verify live catalogue and streams
-        run: python3 scripts/live_api_smoke.py
-
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -72,9 +69,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  provider:
+    name: Live catalogue and stream journey
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify live catalogue and streams
+        run: python3 scripts/live_api_smoke.py
+
   device:
     name: Android device journey
-    needs: build
+    needs: [build, provider]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

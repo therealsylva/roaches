@@ -24,7 +24,7 @@ HOSTS = (
     "https://api.inmoviebox.com",
 )
 SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
-RETRYABLE = {403, 406, 407, 429, 500, 502, 503, 504}
+IDENTITY = str(uuid.uuid4())
 
 
 def md5_hex(value: bytes) -> str:
@@ -51,9 +51,11 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
     )
     key = base64.b64decode(SECRET + "=" * ((4 - len(SECRET) % 4) % 4))
     signature = base64.b64encode(hmac.new(key, canonical.encode(), hashlib.md5).digest()).decode()
-    identity = str(uuid.uuid4())
     headers = {
-        "User-Agent": "com.community.oneroom/50020046 (Linux; U; Android 13; en_US; Roaches CI)",
+        "User-Agent": (
+            "com.community.oneroom/50020046 (Linux; U; Android 13; en_US; "
+            "23078RKD5C; Build/TQ2A.230405.003; Cronet/135.0.7012.3)"
+        ),
         "Accept": "application/json",
         "Content-Type": "application/json",
         "X-Client-Token": f"{timestamp},{md5_hex(str(timestamp)[::-1].encode())}",
@@ -67,9 +69,17 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
                 "version_code": 50020046,
                 "os": "android",
                 "os_version": "13",
-                "device_id": identity.replace("-", ""),
-                "gaid": identity,
+                "install_ch": "ps",
+                "device_id": IDENTITY.replace("-", ""),
+                "install_store": "ps",
+                "gaid": IDENTITY,
+                "brand": "Redmi",
+                "model": "23078RKD5C",
+                "system_language": "en",
+                "net": "NETWORK_WIFI",
                 "region": "US",
+                "timezone": "America/New_York",
+                "sp_code": "40401",
                 "X-Play-Mode": "2",
             },
             separators=(",", ":"),
@@ -95,9 +105,12 @@ def request(method: str, path: str, payload: dict | None = None, token: str | No
                 decoded = json.load(response)
                 return decoded.get("data", decoded), next_token
         except urllib.error.HTTPError as error:
-            last_error = error
-            if error.code not in RETRYABLE:
-                raise
+            response_body = error.read(512).decode("utf-8", errors="replace").strip()
+            last_error = RuntimeError(
+                f"{host} returned HTTP {error.code}: {response_body or error.reason}"
+            )
+            if error.code == 429:
+                time.sleep(0.4)
         except (OSError, ValueError) as error:
             last_error = error
     raise RuntimeError("all provider hosts failed") from last_error
