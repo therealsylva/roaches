@@ -1,21 +1,13 @@
-# Upstream and generated Android artifacts
-*.apk
-*.aab
-*.apks
-*.dex
-*.keystore
-*.jks
-
-# Recovered/decompiled working trees
-.work/
-build/
-dist/
-
-# Local tooling
-.tools/
-.android/
-
-# Editor and OS files
+.gradle/
 .idea/
+local.properties
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
 *.iml
-.DS_Store
+*.jks
+*.keystore
+artifacts/
+__pycache__/
+*.py[cod]

@@ -1,0 +1,118 @@
+name: Roaches Android
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roaches-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, audit and live provider smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Enforce design and privacy contract
+        run: python3 scripts/anti_slop.py
+
+      - name: Unit tests, lint and APK
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+
+      - name: Verify APK signature and permissions
+        run: |
+          APK="app/build/outputs/apk/debug/roaches-debug.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump permissions "$APK" | tee permissions.txt
+          test "$(grep -c '^permission:' permissions.txt)" -le 3
+          ! grep -Eiq 'AD_ID|READ_CONTACTS|ACCESS_FINE_LOCATION|QUERY_ALL_PACKAGES' permissions.txt
+
+      - name: Verify live catalogue and streams
+        run: python3 scripts/live_api_smoke.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roaches-debug-apk
+          path: app/build/outputs/apk/debug/roaches-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: roaches-quality-reports
+          path: |
+            app/build/reports/
+            permissions.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  device:
+    name: Android device journey
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Run navigation and accessibility journey
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          disk-size: 4096M
+          script: |
+            gradle :app:installDebug
+            adb shell am start -W -n com.therealsylva.roaches.debug/com.therealsylva.roaches.MainActivity
+            sleep 12
+            mkdir -p artifacts/ui
+            adb exec-out screencap -p > artifacts/ui/discover.png
+            gradle :app:connectedDebugAndroidTest --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: roaches-device-evidence
+          path: |
+            artifacts/ui/
+            app/build/reports/androidTests/
+          if-no-files-found: warn
+          retention-days: 14

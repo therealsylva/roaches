@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="roaches_canvas">#090A0B</color>
+    <color name="roaches_ink">#F2F0E9</color>
+    <color name="roaches_crawl">#C47A45</color>
+</resources>
