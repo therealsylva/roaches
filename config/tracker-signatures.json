@@ -1,0 +1,32 @@
+{
+  "advertising": [
+    "ca-app-pub-",
+    "com.bytedance.sdk.openadsdk",
+    "com.cloud.hisavana",
+    "com.google.android.gms.ads",
+    "com.google.android.gms.permission.ad_id",
+    "com.hisavana",
+    "com.mbridge",
+    "com.transsion.ad",
+    "com.vungle",
+    "hisavana",
+    "mbridge"
+  ],
+  "attribution": [
+    "access_adservices_ad_id",
+    "access_adservices_attribution",
+    "com.google.android.finsky.permission.bind_get_install_referrer_service",
+    "installreferrer"
+  ],
+  "telemetry": [
+    "analyticsconnectorregistrar",
+    "apminsight",
+    "com.google.android.datatransport",
+    "com.google.android.gms.measurement",
+    "crashlytics",
+    "firebase-analytics",
+    "firebase-perf",
+    "firebasecrashlytics",
+    "firebaseperfregistrar"
+  ]
+}
