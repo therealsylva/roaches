@@ -117,7 +117,10 @@ def main() -> int:
                 if not audio_selected and "Choose an audio track to load streams." in screen:
                     os.write(fd, b"\r")
                     audio_selected = True
-                stream_match = re.search(r"Streams\s*·\s*([1-9][0-9]*) available", screen)
+                stream_match = re.search(
+                    r"(?:Streams\s*)?[^\n]*\s*·\s*([1-9][0-9]*) available\s*·\s*1/",
+                    screen,
+                )
                 if stream_match:
                     print(f"LIVE_RESOURCE_OK streams={stream_match.group(1)}")
                     return 0
