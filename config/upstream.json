@@ -1,0 +1,14 @@
+{
+  "artifact": "moviebox-v-4.0-community-edition.apk",
+  "package": "com.community.oneroom",
+  "version_code": 50020121,
+  "version_name": "4.0.01.0813.03",
+  "size_bytes": 63673979,
+  "sha256": "6a5b57d8455414ce48d912eb7177562b5fe7e66c6316575b0bded8f7f619ad6b",
+  "signer_certificate_sha256": "03d4b741632d13b6c23e2de4c6adcdb7712f1980b619c183221801730bbd0410",
+  "signer_subject": "CN=tsoneroom, OU=transsion, O=mi, L=shanghai, ST=shanghai, C=CN",
+  "min_sdk": 23,
+  "target_sdk": 35,
+  "compile_sdk": 35,
+  "protection": "Ijiami/IJM"
+}
