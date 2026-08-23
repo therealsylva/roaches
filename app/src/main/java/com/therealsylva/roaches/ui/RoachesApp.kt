@@ -17,6 +17,8 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
@@ -174,7 +176,7 @@ private fun RoachesNavigation(selected: MainDestination, onSelect: (MainDestinat
     ) {
         items.forEach { item ->
             val active = item.destination == selected
-            androidx.compose.material3.NavigationBarItem(
+            NavigationBarItem(
                 selected = active,
                 onClick = { onSelect(item.destination) },
                 icon = {
@@ -196,7 +198,7 @@ private fun RoachesNavigation(selected: MainDestination, onSelect: (MainDestinat
                     this.selected = active
                     role = Role.Tab
                 },
-                colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
+                colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = RoachesColors.Ink,
                     selectedTextColor = RoachesColors.Ink,
                     unselectedIconColor = RoachesColors.InkFaint,

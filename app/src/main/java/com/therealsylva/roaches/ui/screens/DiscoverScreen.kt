@@ -121,6 +121,7 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
             .fillMaxWidth()
             .height(if (item.description.isNullOrBlank()) 490.dp else 530.dp),
     ) {
+        val isWide = maxWidth > 700.dp
         AsyncImage(
             model = item.backdropUrl ?: item.posterUrl,
             contentDescription = null,
@@ -139,12 +140,12 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.lg)
-                .fillMaxWidth(if (maxWidth > 700.dp) 0.6f else 0.9f),
+                .fillMaxWidth(if (isWide) 0.6f else 0.9f),
             verticalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
         ) {
             Text(
                 text = item.title,
-                style = if (maxWidth > 700.dp) MaterialTheme.typography.displayLarge else MaterialTheme.typography.headlineLarge,
+                style = if (isWide) MaterialTheme.typography.displayLarge else MaterialTheme.typography.headlineLarge,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )

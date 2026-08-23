@@ -174,7 +174,9 @@ private fun DetailsHero(
     onWatch: () -> Unit,
     onToggleSaved: () -> Unit,
 ) {
-    BoxWithConstraints(Modifier.fillMaxWidth().height(if (maxWidth > 700.dp) 560.dp else 510.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val isWide = maxWidth > 700.dp
+        Box(Modifier.fillMaxWidth().height(if (isWide) 560.dp else 510.dp)) {
         AsyncImage(
             model = item.backdropUrl ?: item.posterUrl,
             contentDescription = null,
@@ -206,13 +208,13 @@ private fun DetailsHero(
         Column(
             Modifier
                 .align(Alignment.BottomStart)
-                .fillMaxWidth(if (maxWidth > 700.dp) 0.7f else 1f)
+                .fillMaxWidth(if (isWide) 0.7f else 1f)
                 .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.lg),
             verticalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
         ) {
             Text(
                 item.title,
-                style = if (maxWidth > 700.dp) MaterialTheme.typography.displayLarge else MaterialTheme.typography.headlineLarge,
+                style = if (isWide) MaterialTheme.typography.displayLarge else MaterialTheme.typography.headlineLarge,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -227,6 +229,7 @@ private fun DetailsHero(
                 color = RoachesColors.InkMuted,
             )
             PrimaryWatchButton(onClick = onWatch)
+        }
         }
     }
 }

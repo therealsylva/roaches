@@ -74,7 +74,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         if (mutableState.value.discoverLoading && mutableState.value.shelves.isNotEmpty()) return
         mutableState.update { it.copy(discoverLoading = true, discoverError = null) }
         viewModelScope.launch {
-            runCatching(repository::discover)
+            runCatching { repository.discover() }
                 .onSuccess { shelves ->
                     mutableState.update {
                         it.copy(
