@@ -2,6 +2,31 @@ package com.therealsylva.roaches.data.model
 
 enum class MediaKind { Movie, Series }
 
+enum class ContentRegion(
+    val apiCode: String,
+    val label: String,
+    internal val forwardedIpPrefix: String,
+    internal val localeTag: String,
+    internal val timezone: String,
+    internal val carrierCode: String,
+) {
+    GlobalEnglish("US", "Global English", "73.162", "en-US", "America/New_York", "310260"),
+    UnitedKingdom("GB", "United Kingdom", "86.12", "en-GB", "Europe/London", "23415"),
+    Nigeria("NG", "Nigeria", "105.112", "en-NG", "Africa/Lagos", "62130"),
+}
+
+enum class PlaybackQuality(val height: Int, val label: String) {
+    Auto(0, "Best available"),
+    FullHd(1080, "Up to 1080p"),
+    Hd(720, "Up to 720p"),
+}
+
+data class AppSettings(
+    val contentRegion: ContentRegion = ContentRegion.GlobalEnglish,
+    val playbackQuality: PlaybackQuality = PlaybackQuality.Auto,
+    val wifiOnlyDownloads: Boolean = true,
+)
+
 data class MediaItem(
     val id: String,
     val title: String,

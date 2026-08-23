@@ -17,4 +17,11 @@ class ModelsTest {
         val source = StreamSource("id", "https://example.invalid/video", 1080, "H.264", "English")
         assertThat(source.technicalLabel).isEqualTo("1080p · H.264 · English")
     }
+
+    @Test
+    fun settingsDefaultToGlobalEnglishWithoutTracking() {
+        val settings = AppSettings()
+        assertThat(settings.contentRegion).isEqualTo(ContentRegion.GlobalEnglish)
+        assertThat(settings.wifiOnlyDownloads).isTrue()
+    }
 }

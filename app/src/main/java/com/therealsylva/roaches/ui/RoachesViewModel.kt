@@ -4,13 +4,17 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.therealsylva.roaches.data.local.LocalStore
+import com.therealsylva.roaches.data.model.AppSettings
+import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.DownloadEntry
 import com.therealsylva.roaches.data.model.MediaDetails
 import com.therealsylva.roaches.data.model.MediaItem
+import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.WatchEntry
 import com.therealsylva.roaches.data.repository.RoachesRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +24,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 enum class MainDestination { Discover, Search, Library, Downloads }
-enum class AppScreen { Browse, Details, Player }
+enum class AppScreen { Browse, Details, Player, Settings }
 
 data class RoachesUiState(
     val destination: MainDestination = MainDestination.Discover,
@@ -48,12 +52,13 @@ data class RoachesUiState(
     val watchlist: List<MediaItem> = emptyList(),
     val history: List<WatchEntry> = emptyList(),
     val downloads: List<DownloadEntry> = emptyList(),
+    val settings: AppSettings = AppSettings(),
     val notice: String? = null,
 )
 
 class RoachesViewModel(application: Application) : AndroidViewModel(application) {
     private val store = LocalStore(application)
-    private val repository = RoachesRepository(store)
+    private var repository = RoachesRepository(store)
     private val mutableState = MutableStateFlow(RoachesUiState())
     val state: StateFlow<RoachesUiState> = mutableState.asStateFlow()
 
@@ -108,24 +113,78 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         if (query.isBlank()) return
         searchJob = viewModelScope.launch {
             delay(320)
-            val expected = query.trim()
-            runCatching { repository.search(expected) }
-                .onSuccess { results ->
-                    if (mutableState.value.searchQuery.trim() == expected) {
-                        mutableState.update { it.copy(searchResults = results, searchLoading = false) }
-                    }
-                }
-                .onFailure { failure ->
-                    if (mutableState.value.searchQuery.trim() == expected) {
-                        mutableState.update {
-                            it.copy(
-                                searchLoading = false,
-                                searchError = failure.userMessage("Search is temporarily unavailable."),
-                            )
-                        }
-                    }
-                }
+            performSearch(query.trim())
         }
+    }
+
+    fun submitSearch() {
+        val query = mutableState.value.searchQuery.trim()
+        if (query.isBlank()) return
+        searchJob?.cancel()
+        mutableState.update { it.copy(searchLoading = true, searchError = null) }
+        searchJob = viewModelScope.launch { performSearch(query) }
+    }
+
+    private suspend fun performSearch(expected: String) {
+        try {
+            val results = repository.search(expected)
+            if (mutableState.value.searchQuery.trim() == expected) {
+                mutableState.update { it.copy(searchResults = results, searchLoading = false) }
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            if (mutableState.value.searchQuery.trim() == expected) {
+                mutableState.update {
+                    it.copy(
+                        searchLoading = false,
+                        searchError = failure.userMessage("Search is temporarily unavailable."),
+                    )
+                }
+            }
+        }
+    }
+
+    fun openSettings() {
+        mutableState.update { it.copy(screen = AppScreen.Settings) }
+    }
+
+    fun setContentRegion(region: ContentRegion) {
+        if (region == mutableState.value.settings.contentRegion) return
+        store.setContentRegion(region)
+        repository = RoachesRepository(store)
+        searchJob?.cancel()
+        mutableState.update {
+            it.copy(
+                settings = store.settings(),
+                shelves = emptyList(),
+                discoverLoading = false,
+                discoverError = null,
+                searchQuery = "",
+                searchResults = emptyList(),
+                searchLoading = false,
+                searchError = null,
+            )
+        }
+        loadDiscover()
+    }
+
+    fun setPlaybackQuality(quality: PlaybackQuality) {
+        if (quality == mutableState.value.settings.playbackQuality) return
+        store.setPlaybackQuality(quality)
+        repository = RoachesRepository(store)
+        mutableState.update { it.copy(settings = store.settings(), notice = "Playback quality updated") }
+    }
+
+    fun setWifiOnlyDownloads(enabled: Boolean) {
+        store.setWifiOnlyDownloads(enabled)
+        mutableState.update { it.copy(settings = store.settings()) }
+    }
+
+    fun clearHistory() {
+        store.clearHistory()
+        refreshLocal()
+        mutableState.update { it.copy(notice = "Watch history cleared") }
     }
 
     fun openDetails(item: MediaItem) {
@@ -295,6 +354,10 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 mutableState.update { it.copy(screen = AppScreen.Browse, details = null, detailsSeed = null) }
                 true
             }
+            AppScreen.Settings -> {
+                mutableState.update { it.copy(screen = AppScreen.Browse) }
+                true
+            }
             AppScreen.Browse -> false
         }
     }
@@ -305,6 +368,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 watchlist = store.watchlist(),
                 history = store.history(),
                 downloads = store.downloads(),
+                settings = store.settings(),
             )
         }
     }

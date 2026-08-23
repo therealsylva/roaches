@@ -17,9 +17,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,6 +48,7 @@ import com.therealsylva.roaches.ui.theme.RoachesSpacing
 fun DiscoverScreen(
     state: RoachesUiState,
     onRetry: () -> Unit,
+    onSettings: () -> Unit,
     onOpen: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -53,10 +56,10 @@ fun DiscoverScreen(
     LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = RoachesSpacing.xl)) {
         item(key = "hero") {
             if (featured != null) {
-                DiscoverHero(featured, onOpen)
+                DiscoverHero(featured, onSettings, onOpen)
             } else {
                 Column(Modifier.statusBarsPadding().padding(top = RoachesSpacing.lg)) {
-                    RoachesWordmark(Modifier.padding(horizontal = RoachesSpacing.md))
+                    DiscoverHeader(onSettings, Modifier.padding(horizontal = RoachesSpacing.md))
                     if (state.discoverLoading) {
                         LoadingState("Opening the catalogue", Modifier.padding(top = 140.dp))
                     } else {
@@ -115,7 +118,7 @@ fun DiscoverScreen(
 }
 
 @Composable
-private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
+private fun DiscoverHero(item: MediaItem, onSettings: () -> Unit, onOpen: (MediaItem) -> Unit) {
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -130,11 +133,12 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
             modifier = Modifier.fillMaxSize(),
         )
         ArtworkScrim(Modifier.fillMaxSize(), strong = true)
-        RoachesWordmark(
-            Modifier
-                .align(Alignment.TopStart)
+        DiscoverHeader(
+            onSettings = onSettings,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
                 .statusBarsPadding()
-                .padding(RoachesSpacing.md),
+                .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
         )
         Column(
             modifier = Modifier
@@ -182,6 +186,24 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
                     Icon(Icons.Rounded.ArrowForward, contentDescription = null)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverHeader(onSettings: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RoachesWordmark()
+        IconButton(onClick = onSettings) {
+            Icon(
+                imageVector = Icons.Rounded.Settings,
+                contentDescription = "Settings",
+                tint = RoachesColors.Ink,
+            )
         }
     }
 }

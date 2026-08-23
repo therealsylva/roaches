@@ -16,8 +16,11 @@ class RoachesNavigationTest {
     val compose = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun fourPrimaryDestinationsAreReachable() {
+    fun primaryDestinationsAndSettingsAreReachable() {
         compose.onNodeWithContentDescription("Discover").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Catalogue region").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("Search").performClick()
         compose.onNodeWithText("Title, actor or series").assertIsDisplayed()
         compose.onNodeWithContentDescription("Library").performClick()

@@ -14,6 +14,10 @@ internal data class ClientIdentity(
     val installId: String,
     val sessionId: String,
     val forwardedIp: String,
+    val regionCode: String,
+    val localeTag: String,
+    val timezone: String,
+    val carrierCode: String,
 )
 
 internal class RequestSigner(private val identity: ClientIdentity) {
@@ -30,10 +34,10 @@ internal class RequestSigner(private val identity: ClientIdentity) {
         append(" (Linux; U; Android ")
         append(Build.VERSION.RELEASE.ifBlank { "13" })
         append("; ")
-        append(Locale.getDefault().toLanguageTag())
+        append(identity.localeTag.replace('-', '_'))
         append("; ")
         append(Build.MODEL.ifBlank { "Android" })
-        append("; Roaches/0.1)")
+        append("; Roaches/0.2)")
     }
 
     private val clientInfo = JSONObject()
@@ -48,11 +52,11 @@ internal class RequestSigner(private val identity: ClientIdentity) {
         .put("gaid", identity.sessionId)
         .put("brand", Build.BRAND.ifBlank { "Android" })
         .put("model", Build.MODEL.ifBlank { "Android" })
-        .put("system_language", Locale.getDefault().language.ifBlank { "en" })
+        .put("system_language", "en")
         .put("net", "NETWORK_WIFI")
-        .put("region", Locale.getDefault().country.ifBlank { "US" })
-        .put("timezone", java.util.TimeZone.getDefault().id)
-        .put("sp_code", "40401")
+        .put("region", identity.regionCode)
+        .put("timezone", identity.timezone)
+        .put("sp_code", identity.carrierCode)
         .put("X-Play-Mode", "2")
         .toString()
 

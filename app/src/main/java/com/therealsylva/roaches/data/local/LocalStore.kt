@@ -4,10 +4,13 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import com.therealsylva.roaches.data.model.AppSettings
+import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.DownloadEntry
 import com.therealsylva.roaches.data.model.DownloadState
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
+import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.WatchEntry
 import com.therealsylva.roaches.data.remote.ClientIdentity
@@ -22,11 +25,36 @@ class LocalStore(context: Context) {
     internal fun clientIdentity(): ClientIdentity {
         val installId = valueOrCreate("install_id") { UUID.randomUUID().toString() }
         val sessionId = valueOrCreate("session_id") { UUID.randomUUID().toString() }
-        val forwardedIp = valueOrCreate("forwarded_ip") {
-            val hash = installId.hashCode().toUInt().toLong()
-            "103.241.${(hash shr 8) % 253 + 1}.${hash % 253 + 1}"
-        }
-        return ClientIdentity(installId, sessionId, forwardedIp)
+        val region = settings().contentRegion
+        val hash = installId.hashCode().toUInt().toLong()
+        val forwardedIp = "${region.forwardedIpPrefix}.${(hash shr 8) % 253 + 1}.${hash % 253 + 1}"
+        return ClientIdentity(
+            installId = installId,
+            sessionId = sessionId,
+            forwardedIp = forwardedIp,
+            regionCode = region.apiCode,
+            localeTag = region.localeTag,
+            timezone = region.timezone,
+            carrierCode = region.carrierCode,
+        )
+    }
+
+    fun settings(): AppSettings = AppSettings(
+        contentRegion = preferences.enumValue("content_region", ContentRegion.GlobalEnglish),
+        playbackQuality = preferences.enumValue("playback_quality", PlaybackQuality.Auto),
+        wifiOnlyDownloads = preferences.getBoolean("wifi_only_downloads", true),
+    )
+
+    fun setContentRegion(region: ContentRegion) {
+        preferences.edit().putString("content_region", region.name).apply()
+    }
+
+    fun setPlaybackQuality(quality: PlaybackQuality) {
+        preferences.edit().putString("playback_quality", quality.name).apply()
+    }
+
+    fun setWifiOnlyDownloads(enabled: Boolean) {
+        preferences.edit().putBoolean("wifi_only_downloads", enabled).apply()
     }
 
     fun watchlist(): List<MediaItem> = readArray("watchlist").objects().mapNotNull(::mediaFromJson)
@@ -61,6 +89,10 @@ class LocalStore(context: Context) {
         writeArray("history", current.take(40).map(::watchToJson))
     }
 
+    fun clearHistory() {
+        writeArray("history", emptyList<JSONObject>())
+    }
+
     fun downloads(): List<DownloadEntry> = readArray("downloads").objects()
         .mapNotNull(::downloadFromJson)
         .sortedByDescending(DownloadEntry::createdAt)
@@ -77,7 +109,7 @@ class LocalStore(context: Context) {
             .setTitle(media.title)
             .setDescription("${source.qualityLabel} · Roaches")
             .setMimeType("video/*")
-            .setAllowedOverMetered(true)
+            .setAllowedOverMetered(!settings().wifiOnlyDownloads)
             .setAllowedOverRoaming(false)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(
@@ -140,6 +172,13 @@ class LocalStore(context: Context) {
         preferences.edit().putString(key, JSONArray(objects).toString()).apply()
     }
 }
+
+private inline fun <reified T : Enum<T>> android.content.SharedPreferences.enumValue(
+    key: String,
+    fallback: T,
+): T = getString(key, null)?.let { stored ->
+    enumValues<T>().firstOrNull { it.name == stored }
+} ?: fallback
 
 private fun JSONArray.objects(): List<JSONObject> = buildList {
     repeat(length()) { index -> optJSONObject(index)?.let(::add) }

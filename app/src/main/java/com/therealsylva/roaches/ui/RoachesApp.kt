@@ -41,6 +41,7 @@ import com.therealsylva.roaches.ui.screens.DownloadsScreen
 import com.therealsylva.roaches.ui.screens.LibraryScreen
 import com.therealsylva.roaches.ui.screens.PlayerScreen
 import com.therealsylva.roaches.ui.screens.SearchScreen
+import com.therealsylva.roaches.ui.screens.SettingsScreen
 import com.therealsylva.roaches.ui.theme.RoachesColors
 import kotlinx.coroutines.delay
 
@@ -88,6 +89,15 @@ fun RoachesApp(
                 onPlay = viewModel::play,
                 onDownload = viewModel::download,
             )
+            AppScreen.Settings -> SettingsScreen(
+                settings = state.settings,
+                historyCount = state.history.size,
+                onBack = { viewModel.goBack() },
+                onRegion = viewModel::setContentRegion,
+                onQuality = viewModel::setPlaybackQuality,
+                onWifiOnly = viewModel::setWifiOnlyDownloads,
+                onClearHistory = viewModel::clearHistory,
+            )
             AppScreen.Browse -> BrowseShell(state, viewModel)
         }
 
@@ -122,6 +132,7 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                 MainDestination.Discover -> DiscoverScreen(
                     state = state,
                     onRetry = viewModel::loadDiscover,
+                    onSettings = viewModel::openSettings,
                     onOpen = viewModel::openDetails,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -132,6 +143,7 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                     error = state.searchError,
                     suggestions = state.shelves.firstOrNull()?.items.orEmpty(),
                     onQuery = viewModel::updateSearch,
+                    onSubmit = viewModel::submitSearch,
                     onOpen = viewModel::openDetails,
                     modifier = Modifier.fillMaxSize(),
                 )

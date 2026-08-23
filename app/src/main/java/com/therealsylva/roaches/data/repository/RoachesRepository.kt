@@ -1,10 +1,12 @@
 package com.therealsylva.roaches.data.repository
 
 import com.therealsylva.roaches.data.local.LocalStore
+import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.Episode
 import com.therealsylva.roaches.data.model.MediaDetails
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
+import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.Season
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
@@ -14,50 +16,40 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class RoachesRepository(store: LocalStore) {
+    private val settings = store.settings()
     private val api = MovieBoxApi(store.clientIdentity())
 
     suspend fun discover(): List<Shelf> {
         val payload = api.home()
         val groups = (payload as? JSONObject)?.optJSONArray("items") ?: JSONArray()
-        return buildList {
+        val shelves = buildList {
             repeat(groups.length()) { index ->
                 val group = groups.optJSONObject(index) ?: return@repeat
                 val title = group.string("title", "name").orEmpty()
                 val subjects = group.optJSONArray("subjects") ?: return@repeat
-                val items = subjects.mediaItems().distinctBy(MediaItem::id)
+                val items = subjects.mediaItems()
+                    .distinctBy(MediaItem::id)
+                    .prioritizeFor(settings.contentRegion)
                 if (items.isNotEmpty()) {
                     add(Shelf("home-$index", normalizeShelfTitle(title, index), items))
                 }
             }
-        }.ifEmpty {
+        }.sortedBy { it.title.regionalPenalty(settings.contentRegion) }
+        return shelves.ifEmpty {
             val fallback = when (payload) {
                 is JSONArray -> payload.mediaItems()
-                is JSONObject -> payload.optJSONArray("subjects")?.mediaItems().orEmpty()
+                is JSONObject -> payload.optJSONArray("subjects")
+                    ?.mediaItems()
+                    .orEmpty()
                 else -> emptyList()
-            }
+            }.prioritizeFor(settings.contentRegion)
             if (fallback.isEmpty()) emptyList() else listOf(Shelf("discover", "Discover", fallback))
         }
     }
 
     suspend fun search(query: String, page: Int = 1): List<MediaItem> {
         val payload = api.search(query, page)
-        val root = payload as? JSONObject ?: return emptyList()
-        val resultGroups = root.optJSONArray("results") ?: JSONArray()
-        val subjects = buildList {
-            repeat(resultGroups.length()) { index ->
-                val group = resultGroups.optJSONObject(index) ?: return@repeat
-                val values = group.optJSONArray("subjects") ?: return@repeat
-                repeat(values.length()) { itemIndex -> values.optJSONObject(itemIndex)?.let(::add) }
-            }
-        }
-        return JSONArray(subjects).mediaItems()
-            .filter { item -> item.title.contains(query, ignoreCase = true) }
-            .distinctBy { "${it.title.lowercase()}-${it.year}-${it.kind}" }
-            .sortedWith(
-                compareByDescending<MediaItem> { it.title.equals(query, ignoreCase = true) }
-                    .thenByDescending { it.title.startsWith(query, ignoreCase = true) }
-                    .thenByDescending(MediaItem::year),
-            )
+        return parseSearchResults(payload, query)
     }
 
     suspend fun details(seed: MediaItem): MediaDetails {
@@ -88,7 +80,7 @@ class RoachesRepository(store: LocalStore) {
             is JSONObject -> payload.optJSONArray("list") ?: JSONArray()
             else -> JSONArray()
         }
-        return buildList {
+        val parsed = buildList {
             repeat(resources.length()) { index ->
                 val source = resources.optJSONObject(index) ?: return@repeat
                 val url = source.string("resourceLink", "url", "link") ?: return@repeat
@@ -105,7 +97,16 @@ class RoachesRepository(store: LocalStore) {
                 )
             }
         }.distinctBy { it.resourceId.ifBlank { it.url.substringBefore('?') } }
-            .sortedWith(compareByDescending<StreamSource>(StreamSource::resolution).thenBy { it.sizeBytes })
+        val quality = settings.playbackQuality
+        return if (quality == PlaybackQuality.Auto) {
+            parsed.sortedWith(compareByDescending<StreamSource>(StreamSource::resolution).thenBy { it.sizeBytes })
+        } else {
+            parsed.sortedWith(
+                compareBy<StreamSource> { source ->
+                    if (source.resolution in 1..quality.height) 0 else 1
+                }.thenByDescending(StreamSource::resolution),
+            )
+        }
     }
 
     suspend fun captions(subjectId: String, source: StreamSource): List<SubtitleTrack> {
@@ -123,8 +124,55 @@ class RoachesRepository(store: LocalStore) {
 }
 
 private fun JSONArray.mediaItems(): List<MediaItem> = buildList {
-    repeat(length()) { index -> optJSONObject(index)?.toMediaItem()?.let(::add) }
+    repeat(length()) { index ->
+        optJSONObject(index)?.toMediaItem()?.let(::add)
+    }
 }
+
+internal fun parseSearchResults(payload: Any, query: String): List<MediaItem> {
+    val subjects = buildList {
+        collectMediaObjects(payload, this)
+    }
+    return JSONArray(subjects).mediaItems()
+        .distinctBy(MediaItem::id)
+        .sortedWith(
+            compareByDescending<MediaItem> { it.title.equals(query, ignoreCase = true) }
+                .thenByDescending { it.title.startsWith(query, ignoreCase = true) }
+                .thenByDescending(MediaItem::year),
+        )
+}
+
+private fun collectMediaObjects(value: Any?, output: MutableList<JSONObject>) {
+    when (value) {
+        is JSONArray -> repeat(value.length()) { index -> collectMediaObjects(value.opt(index), output) }
+        is JSONObject -> {
+            if (value.string("subjectId", "id") != null && value.string("title", "name") != null) {
+                output.add(value)
+            }
+            value.keys().forEach { key -> collectMediaObjects(value.opt(key), output) }
+        }
+    }
+}
+
+private fun List<MediaItem>.prioritizeFor(region: ContentRegion): List<MediaItem> =
+    withIndex().sortedWith(
+        compareBy<IndexedValue<MediaItem>> { it.value.regionalPenalty(region) }
+            .thenBy(IndexedValue<MediaItem>::index),
+    ).map(IndexedValue<MediaItem>::value)
+
+private fun MediaItem.regionalPenalty(region: ContentRegion): Int =
+    listOfNotNull(title, description).joinToString(" ").regionalPenalty(region)
+
+private fun String.regionalPenalty(region: ContentRegion): Int = when (region) {
+    ContentRegion.GlobalEnglish,
+    ContentRegion.UnitedKingdom,
+    ContentRegion.Nigeria,
+    -> if (REGIONAL_MARKER.containsMatchIn(this)) 1 else 0
+}
+
+private val REGIONAL_MARKER = Regex(
+    "(?i)\\b(india|bollywood|hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi)\\b",
+)
 
 private fun JSONObject.toMediaItem(): MediaItem? {
     val id = string("subjectId", "id") ?: return null
