@@ -70,7 +70,9 @@ def main() -> int:
     query_sent = False
     deadline = time.monotonic() + 90
     query_at = 0.0
-    success = None
+    result_seen_at = 0.0
+    moved_to_movie = False
+    details_opened = False
 
     try:
         while time.monotonic() < deadline:
@@ -94,15 +96,29 @@ def main() -> int:
 
             if query_sent and time.monotonic() - query_at > 1:
                 success = next((marker for marker in SUCCESS_MARKERS if marker in current), None)
-                if success:
+                if success and not result_seen_at:
                     print(f"LIVE_SEARCH_OK marker={success!r}")
-                    return 0
+                    result_seen_at = time.monotonic()
                 failure = next((marker for marker in FAILURE_MARKERS if marker in current), None)
                 if failure:
                     print(f"LIVE_SEARCH_FAILED marker={failure!r}", file=sys.stderr)
                     return 1
 
-        print("LIVE_SEARCH_FAILED no verified result marker before timeout", file=sys.stderr)
+            if result_seen_at and not moved_to_movie:
+                os.write(fd, b"\x1b[B")
+                moved_to_movie = True
+            elif moved_to_movie and not details_opened and time.monotonic() - result_seen_at > 0.75:
+                os.write(fd, b"\r")
+                details_opened = True
+
+            if details_opened:
+                screen = sanitized_screen(bytes(raw))
+                stream_match = re.search(r"Streams\s*·\s*([1-9][0-9]*) available", screen)
+                if stream_match:
+                    print(f"LIVE_RESOURCE_OK streams={stream_match.group(1)}")
+                    return 0
+
+        print("LIVE_RESOURCE_FAILED no verified stream list before timeout", file=sys.stderr)
         return 1
     finally:
         print("--- sanitized TUI capture ---")
