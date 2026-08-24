@@ -56,8 +56,8 @@ class UpdateChecker(
     }
 
     companion object {
-        const val REPOSITORY_URL = "https://github.com/therealsylva/movieboxxed"
+        const val REPOSITORY_URL = "https://github.com/therealsylva/roaches"
         const val RELEASES_URL = "$REPOSITORY_URL/releases"
-        private const val LATEST_RELEASE_URL = "https://api.github.com/repos/therealsylva/movieboxxed/releases/latest"
+        private const val LATEST_RELEASE_URL = "https://api.github.com/repos/therealsylva/roaches/releases/latest"
     }
 }

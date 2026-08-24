@@ -7,6 +7,7 @@ import com.therealsylva.roaches.data.model.MediaKind
 import com.therealsylva.roaches.data.model.Shelf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Test
 import java.io.IOException
@@ -244,6 +245,214 @@ class RoachesRepositoryTest {
         assertThat(cancellation).isInstanceOf(CancellationException::class.java)
         assertThat(unavailable).isInstanceOf(IOException::class.java)
     }
+
+    @Test
+    fun movieResourcesPaginatePastTheFirstQualityPage() = runBlocking {
+        val initial = parseResourcePage(
+            resourcePage(
+                rows = """{"resourceId":"360","resourceLink":"https://media/360","resolution":360}""",
+                hasMore = true,
+                resolutions = listOf(1080, 720, 360),
+            ),
+        )
+        val requestedPages = mutableListOf<Int>()
+
+        val rows = collectMovieResourceRows(initial, maxPages = 3) { page ->
+            requestedPages += page
+            parseResourcePage(
+                when (page) {
+                    2 -> resourcePage(
+                        """{"resourceId":"720","resourceLink":"https://media/720","resolution":720}""",
+                        hasMore = true,
+                    )
+                    else -> resourcePage(
+                        """{"resourceId":"1080","resourceLink":"https://media/1080","resolution":1080}""",
+                        hasMore = false,
+                    )
+                },
+            )
+        }
+
+        assertThat(requestedPages).containsExactly(2, 3).inOrder()
+        assertThat(rows.map { it.getInt("resolution") }).containsExactly(360, 720, 1080).inOrder()
+    }
+
+    @Test
+    fun episodeResourcesFetchEveryResolutionAndKeepOnlyTheTargetEpisode() = runBlocking {
+        val initial = parseResourcePage(
+            resourcePage(
+                rows = """{"resourceId":"fallback","resourceLink":"https://media/360","resolution":360,"se":2,"ep":3}""",
+                hasMore = true,
+                resolutions = listOf(1080, 720),
+            ),
+        )
+        val seasons = listOf(
+            com.therealsylva.roaches.data.model.Season(
+                1,
+                (1..24).map { com.therealsylva.roaches.data.model.Episode(1, it) },
+            ),
+            com.therealsylva.roaches.data.model.Season(
+                2,
+                (1..10).map { com.therealsylva.roaches.data.model.Episode(2, it) },
+            ),
+        )
+
+        val rows = collectEpisodeResourceRows(
+            initial = initial,
+            season = 2,
+            episode = 3,
+            startPage = estimatedEpisodePage(seasons, 2, 3),
+            resolutions = initial.resolutions,
+        ) { resolution, page ->
+            assertThat(page).isEqualTo(2)
+            parseResourcePage(
+                resourcePage(
+                    rows = """
+                        {"resourceId":"wrong-$resolution","resourceLink":"https://media/wrong-$resolution","resolution":$resolution,"se":2,"ep":2},
+                        {"resourceId":"target-$resolution","resourceLink":"https://media/target-$resolution","resolution":$resolution,"se":2,"ep":3}
+                    """.trimIndent(),
+                    hasMore = false,
+                ),
+            )
+        }
+
+        assertThat(rows.map { it.getString("resourceId") })
+            .containsExactly("fallback", "target-1080", "target-720")
+        assertThat(estimatedEpisodePage(seasons, 2, 3)).isEqualTo(2)
+    }
+
+    @Test
+    fun episodeResourcesPreferTheScopedProviderQueryWithoutGenericScanning() = runBlocking {
+        val scopedPages = mutableListOf<Int>()
+        var genericCalls = 0
+
+        val rows = resolveEpisodeResourceRows(
+            season = 2,
+            episode = 3,
+            startPage = 2,
+            fetchScopedPage = { page ->
+                scopedPages += page
+                parseResourcePage(
+                    resourcePage(
+                        rows = """{"resourceId":"target","resourceLink":"https://media/target","resolution":1080,"se":2,"ep":3}""",
+                        hasMore = false,
+                    ),
+                )
+            },
+            fetchGenericPage = { _, _ ->
+                genericCalls += 1
+                error("generic scan should not run")
+            },
+        )
+
+        assertThat(scopedPages).containsExactly(1)
+        assertThat(genericCalls).isEqualTo(0)
+        assertThat(rows.map { it.getString("resourceId") }).containsExactly("target")
+        Unit
+    }
+
+    @Test
+    fun episodeResourcesFallBackToResolutionScanningWhenScopedQueryIsUnavailable() = runBlocking {
+        val genericRequests = mutableListOf<Pair<Int, Int>>()
+
+        val rows = resolveEpisodeResourceRows(
+            season = 2,
+            episode = 3,
+            startPage = 2,
+            defaultResolutions = listOf(720),
+            fetchScopedPage = {
+                throw IOException("scoped query unavailable")
+            },
+            fetchGenericPage = { resolution, page ->
+                genericRequests += resolution to page
+                if (resolution == 0) {
+                    parseResourcePage(
+                        resourcePage(rows = "", hasMore = true, resolutions = listOf(720)),
+                    )
+                } else {
+                    parseResourcePage(
+                        resourcePage(
+                            rows = """{"resourceId":"fallback","resourceLink":"https://media/fallback","resolution":720,"se":2,"ep":3}""",
+                            hasMore = false,
+                        ),
+                    )
+                }
+            },
+        )
+
+        assertThat(genericRequests).containsExactly(0 to 1, 720 to 2).inOrder()
+        assertThat(rows.map { it.getString("resourceId") }).containsExactly("fallback")
+        Unit
+    }
+
+    @Test
+    fun streamParserUsesProviderMetadataAndTruthfulAudioFallbacks() {
+        val rows = listOf(
+            JSONObject(
+                """
+                {
+                  "resourceId":"english",
+                  "resourceLink":"https://media/english",
+                  "resolution":"1080p",
+                  "codecName":"H.264",
+                  "fileName":"Dune.2021.ENG.WEB-DL.mkv",
+                  "size":"1048576.0",
+                  "duration":"01:30:00",
+                  "uploadBy":"Cinema source"
+                }
+                """.trimIndent(),
+            ),
+            JSONObject(
+                """
+                {
+                  "resourceId":"spanish",
+                  "resourceLink":"https://media/spanish",
+                  "resolution":720,
+                  "language":"Spanish",
+                  "fileName":"Dune.mkv"
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        val sources = parseStreamSources(rows, "Original Audio")
+
+        assertThat(sources[0].audio).isEqualTo("English")
+        assertThat(sources[0].sizeBytes).isEqualTo(1_048_576L)
+        assertThat(sources[0].durationSeconds).isEqualTo(5_400L)
+        assertThat(sources[0].uploader).isEqualTo("Cinema source")
+        assertThat(sources[0].filename).isEqualTo("Dune.2021.ENG.WEB-DL.mkv")
+        assertThat(sources[1].audio).isEqualTo("Spanish")
+    }
+
+    @Test
+    fun originalAudioIsResolvedOnlyWhenDetailsReportAConcreteLanguage() {
+        val concrete = resolveAudioLanguage(
+            "Original Audio",
+            JSONObject("""{"language":"English"}"""),
+            JSONObject(),
+        )
+        val unknown = resolveAudioLanguage(
+            "Original Audio",
+            JSONObject(),
+            JSONObject(),
+        )
+
+        assertThat(concrete).isEqualTo("English")
+        assertThat(unknown).isEqualTo("Original audio")
+    }
+
+    private fun resourcePage(
+        rows: String,
+        hasMore: Boolean,
+        resolutions: List<Int> = emptyList(),
+    ): JSONObject = JSONObject()
+        .put("list", JSONArray("[$rows]"))
+        .put("pager", JSONObject().put("hasMore", hasMore))
+        .put(
+            "collectionResolutions",
+            JSONArray(resolutions.map { JSONObject().put("resolution", it) }),
+        )
 
     private fun media(id: String) = MediaItem(id, id, MediaKind.Movie)
 }

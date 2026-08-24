@@ -51,6 +51,20 @@ internal class MovieBoxApi(
 
         internal fun jsonRequestBody(body: String) =
             body.toByteArray(StandardCharsets.UTF_8).toRequestBody(JSON)
+
+        internal fun episodeResourcePath(
+            subjectId: String,
+            season: Int,
+            episode: Int,
+            page: Int = 1,
+        ): String {
+            require(season > 0 && episode > 0)
+            return "/wefeed-mobile-bff/subject-api/resource?subjectId=${encodeValue(subjectId)}" +
+                "&se=$season&ep=$episode&page=$page&perPage=20"
+        }
+
+        private fun encodeValue(value: String): String =
+            URLEncoder.encode(value, StandardCharsets.UTF_8.name())
     }
 
     private val signer = RequestSigner(identity)
@@ -113,19 +127,25 @@ internal class MovieBoxApi(
         return details
     }
 
-    suspend fun resources(
+    suspend fun resourcePage(
         subjectId: String,
-        season: Int = 0,
-        episode: Int = 0,
+        resolution: Int = 0,
         page: Int = 1,
     ): Any {
-        val episodeQuery = if (season > 0 || episode > 0) "&se=$season&ep=$episode" else ""
+        val resolutionQuery = if (resolution > 0) "&resolution=$resolution" else ""
         return request(
             "GET",
             "/wefeed-mobile-bff/subject-api/resource?subjectId=${encode(subjectId)}" +
-                "$episodeQuery&page=$page&perPage=20",
+                "&page=$page&perPage=20$resolutionQuery",
         )
     }
+
+    suspend fun episodeResourcePage(
+        subjectId: String,
+        season: Int,
+        episode: Int,
+        page: Int = 1,
+    ): Any = request("GET", episodeResourcePath(subjectId, season, episode, page))
 
     suspend fun captions(subjectId: String, resourceId: String): Any = request(
         "GET",
@@ -261,8 +281,7 @@ internal class MovieBoxApi(
     private fun unwrapData(parsed: Any): Any =
         (parsed as? JSONObject)?.opt("data")?.takeUnless { it == JSONObject.NULL } ?: parsed
 
-    private fun encode(value: String): String =
-        URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+    private fun encode(value: String): String = encodeValue(value)
 }
 
 private enum class FailureKind { Access, Dns, Network, RateLimited, Server, Session, Timeout, Tls }

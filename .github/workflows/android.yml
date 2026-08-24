@@ -49,8 +49,14 @@ jobs:
           test -f "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump permissions "$APK" | tee permissions.txt
-          test "$(grep -c '^permission:' permissions.txt)" -le 3
-          ! grep -Eiq 'AD_ID|READ_CONTACTS|ACCESS_FINE_LOCATION|QUERY_ALL_PACKAGES' permissions.txt
+          grep -oE 'android\.permission\.[A-Z0-9_]+' permissions.txt | sort -u > actual-permissions.txt
+          cat > expected-permissions.txt <<'EOF'
+          android.permission.ACCESS_NETWORK_STATE
+          android.permission.INTERNET
+          android.permission.RECEIVE_BOOT_COMPLETED
+          android.permission.WAKE_LOCK
+          EOF
+          diff -u expected-permissions.txt actual-permissions.txt
 
       - uses: actions/upload-artifact@v4
         with:

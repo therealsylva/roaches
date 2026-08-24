@@ -2,6 +2,8 @@ package com.therealsylva.roaches.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -75,6 +77,7 @@ fun DetailsScreen(
     onRetry: () -> Unit,
     onWatch: () -> Unit,
     onDownloadRequest: () -> Unit,
+    onDownloadSeasonRequest: () -> Unit,
     onToggleSaved: () -> Unit,
     onToggleLiked: () -> Unit,
     onSeason: (Int) -> Unit,
@@ -83,6 +86,7 @@ fun DetailsScreen(
     onRetrySources: () -> Unit,
     onPlay: (StreamSource) -> Unit,
     onDownload: (StreamSource) -> Unit,
+    onDownloadSeason: (StreamSource) -> Unit,
     onOpenRelated: (MediaItem) -> Unit,
 ) {
     val item = state.details?.item ?: state.detailsSeed
@@ -154,6 +158,7 @@ fun DetailsScreen(
                                     onSeason = onSeason,
                                     onEpisode = onEpisode,
                                     onWatch = onWatch,
+                                    onDownloadSeason = onDownloadSeasonRequest,
                                 )
                             }
                         }
@@ -205,7 +210,7 @@ fun DetailsScreen(
                     )
                 },
             ) {
-                SourcePicker(state, onRetrySources, onPlay, onDownload)
+                SourcePicker(state, onRetrySources, onPlay, onDownload, onDownloadSeason)
             }
         }
     }
@@ -325,6 +330,7 @@ private fun EpisodePicker(
     onSeason: (Int) -> Unit,
     onEpisode: (Int) -> Unit,
     onWatch: () -> Unit,
+    onDownloadSeason: () -> Unit,
 ) {
     val seasons = state.details?.seasons.orEmpty()
     val episodes = seasons.firstOrNull { it.number == state.selectedSeason }?.episodes.orEmpty()
@@ -369,6 +375,16 @@ private fun EpisodePicker(
             Icon(Icons.Rounded.PlayArrow, contentDescription = null)
             Text("Play S${state.selectedSeason} E${state.selectedEpisode}")
         }
+        TextButton(
+            onClick = onDownloadSeason,
+            modifier = Modifier.padding(horizontal = RoachesSpacing.md).height(48.dp),
+            shape = RoachesShapes.Tight,
+            colors = ButtonDefaults.textButtonColors(contentColor = RoachesColors.InkMuted),
+        ) {
+            Icon(Icons.Rounded.Download, contentDescription = null)
+            Spacer(Modifier.width(RoachesSpacing.xs))
+            Text("Download season ${state.selectedSeason}")
+        }
     }
 }
 
@@ -390,17 +406,38 @@ private fun SourcePicker(
     onRetry: () -> Unit,
     onPlay: (StreamSource) -> Unit,
     onDownload: (StreamSource) -> Unit,
+    onDownloadSeason: (StreamSource) -> Unit,
 ) {
-    val downloading = state.sourceIntent == SourceIntent.Download
+    val downloading = state.sourceIntent != SourceIntent.Playback
+    val seasonDownload = state.sourceIntent == SourceIntent.SeasonDownload
     val media = state.details?.item ?: state.detailsSeed
-    Column(Modifier.fillMaxWidth().padding(bottom = RoachesSpacing.xl)) {
+    val reportedAudio = state.sources.mapNotNull(StreamSource::audio).distinct()
+    val audioLabel = when {
+        reportedAudio.size == 1 -> reportedAudio.single()
+        reportedAudio.size > 1 -> "Multiple provider labels"
+        else -> state.details?.audioLanguage ?: "Not reported"
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = RoachesSpacing.xl),
+    ) {
         Text(
-            if (downloading) "Choose download" else "Choose playback",
+            when {
+                seasonDownload -> "Choose season download"
+                downloading -> "Choose download"
+                else -> "Choose playback"
+            },
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
         )
         Text(
-            "Each option shows its audio language when the provider reports it.",
+            if (seasonDownload) {
+                "Audio: $audioLabel. The closest matching quality will be used for each episode."
+            } else {
+                "Audio: $audioLabel. Change the preference in Settings."
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = RoachesColors.InkMuted,
             modifier = Modifier.padding(horizontal = RoachesSpacing.md),
@@ -413,58 +450,88 @@ private fun SourcePicker(
                 action = "Try again",
                 onAction = onRetry,
             )
-            else -> state.sources.forEachIndexed { index, source ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { if (downloading) onDownload(source) else onPlay(source) }
-                        .padding(start = RoachesSpacing.md, top = RoachesSpacing.sm, bottom = RoachesSpacing.sm),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AsyncImage(
-                        model = media?.posterUrl ?: media?.backdropUrl,
-                        contentDescription = media?.title?.let { "$it thumbnail" },
-                        contentScale = ContentScale.Crop,
-                        placeholder = ColorPainter(RoachesColors.SurfaceQuiet),
-                        error = ColorPainter(RoachesColors.SurfaceQuiet),
-                        modifier = Modifier
-                            .size(width = 52.dp, height = 72.dp)
-                            .clip(RoachesShapes.Tight)
-                            .background(RoachesColors.SurfaceQuiet),
-                    )
-                    Column(
-                        Modifier.weight(1f).padding(horizontal = RoachesSpacing.sm),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+            else -> state.sources.groupBy(StreamSource::qualityLabel).forEach { (quality, sources) ->
+                Text(
+                    "$quality · ${sources.size} ${if (sources.size == 1) "source" else "sources"}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = RoachesColors.InkMuted,
+                    modifier = Modifier.padding(
+                        start = RoachesSpacing.md,
+                        end = RoachesSpacing.md,
+                        top = RoachesSpacing.md,
+                    ),
+                )
+                sources.forEach { source ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                when (state.sourceIntent) {
+                                    SourceIntent.Playback -> onPlay(source)
+                                    SourceIntent.Download -> onDownload(source)
+                                    SourceIntent.SeasonDownload -> onDownloadSeason(source)
+                                }
+                            }
+                            .padding(
+                                start = RoachesSpacing.md,
+                                top = RoachesSpacing.sm,
+                                bottom = RoachesSpacing.sm,
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            source.audio?.takeIf(String::isNotBlank) ?: "Language not reported",
-                            style = MaterialTheme.typography.titleMedium,
+                        AsyncImage(
+                            model = media?.posterUrl ?: media?.backdropUrl,
+                            contentDescription = media?.title?.let { "$it thumbnail" },
+                            contentScale = ContentScale.Crop,
+                            placeholder = ColorPainter(RoachesColors.SurfaceQuiet),
+                            error = ColorPainter(RoachesColors.SurfaceQuiet),
+                            modifier = Modifier
+                                .size(width = 52.dp, height = 72.dp)
+                                .clip(RoachesShapes.Tight)
+                                .background(RoachesColors.SurfaceQuiet),
                         )
-                        Text(
-                            listOfNotNull(
-                                source.qualityLabel,
-                                source.codec?.takeIf(String::isNotBlank),
-                                formatBytes(source.sizeBytes),
-                                "Option ${index + 1}",
-                            ).joinToString(" · "),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = RoachesColors.InkMuted,
-                        )
-                    }
-                    if (downloading) {
-                        Icon(
-                            Icons.Rounded.Download,
-                            contentDescription = "Download ${source.qualityLabel}",
-                            modifier = Modifier.padding(RoachesSpacing.md),
-                        )
-                    } else {
-                        IconButton(onClick = { onDownload(source) }) {
-                            Icon(Icons.Rounded.Download, contentDescription = "Download ${source.qualityLabel}")
+                        Column(
+                            Modifier.weight(1f).padding(horizontal = RoachesSpacing.sm),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                source.audio?.takeIf(String::isNotBlank) ?: "Not reported",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                listOfNotNull(
+                                    source.codec?.takeIf(String::isNotBlank)?.uppercase(),
+                                    formatBytes(source.sizeBytes),
+                                    formatSourceDuration(source.durationSeconds),
+                                    source.uploader?.takeIf(String::isNotBlank),
+                                    source.filename?.takeIf(String::isNotBlank)?.take(52),
+                                ).take(3).ifEmpty { listOf("Provider source") }.joinToString(" · "),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = RoachesColors.InkMuted,
+                            )
+                        }
+                        if (downloading) {
+                            Icon(
+                                Icons.Rounded.Download,
+                                contentDescription = "Download ${source.qualityLabel}",
+                                modifier = Modifier.padding(RoachesSpacing.md),
+                            )
+                        } else {
+                            IconButton(onClick = { onDownload(source) }) {
+                                Icon(Icons.Rounded.Download, contentDescription = "Download ${source.qualityLabel}")
+                            }
                         }
                     }
+                    HorizontalDivider(color = RoachesColors.SurfaceQuiet)
                 }
-                HorizontalDivider(color = RoachesColors.SurfaceQuiet)
             }
         }
     }
+}
+
+private fun formatSourceDuration(seconds: Long?): String? {
+    val total = seconds?.takeIf { it > 0L } ?: return null
+    val hours = total / 3_600
+    val minutes = total % 3_600 / 60
+    return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
 }

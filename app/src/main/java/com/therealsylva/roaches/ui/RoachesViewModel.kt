@@ -6,16 +6,20 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.therealsylva.roaches.data.local.LocalStore
+import com.therealsylva.roaches.data.download.SeasonDownloadCoordinator
+import com.therealsylva.roaches.data.download.selectSeasonDownloadSource
 import com.therealsylva.roaches.data.model.AppSettings
 import com.therealsylva.roaches.data.model.BrowseCategory
 import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.DownloadEntry
+import com.therealsylva.roaches.data.model.DownloadPreference
 import com.therealsylva.roaches.data.model.DownloadState
 import com.therealsylva.roaches.data.model.LocalMediaEntry
 import com.therealsylva.roaches.data.model.MediaDetails
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.PreferredAudio
+import com.therealsylva.roaches.data.model.SeasonDownloadProgress
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.SourceIntent
@@ -30,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.IOException
 
 enum class MainDestination { Discover, Search, Library, Downloads }
 enum class AppScreen { Browse, Category, Details, Player, Settings }
@@ -68,6 +73,7 @@ data class RoachesUiState(
     val liked: List<MediaItem> = emptyList(),
     val history: List<WatchEntry> = emptyList(),
     val downloads: List<DownloadEntry> = emptyList(),
+    val seasonDownloads: List<SeasonDownloadProgress> = emptyList(),
     val localMedia: List<LocalMediaEntry> = emptyList(),
     val settings: AppSettings = AppSettings(),
     val updateLoading: Boolean = false,
@@ -90,6 +96,9 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     init {
         refreshLocal()
         mutableState.update { it.copy(shelves = repository.cachedDiscover()) }
+        if (store.nextSeasonDownloadTask() != null) {
+            SeasonDownloadCoordinator.schedule(application)
+        }
         loadDiscover()
     }
 
@@ -258,8 +267,54 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setWifiOnlyDownloads(enabled: Boolean) {
+        if (enabled == mutableState.value.settings.wifiOnlyDownloads) return
+        val queuedBeforeChange = if (enabled) {
+            emptyList()
+        } else {
+            store.downloads().filter { it.state == DownloadState.Queued }
+        }
         store.setWifiOnlyDownloads(enabled)
-        mutableState.update { it.copy(settings = store.settings()) }
+        mutableState.update {
+            it.copy(
+                settings = store.settings(),
+                notice = if (enabled) "Downloads will wait for Wi-Fi" else "Downloads may use mobile data",
+            )
+        }
+
+        val seasonRetryCount = queuedBeforeChange
+            .mapNotNull(DownloadEntry::batchId)
+            .distinct()
+            .sumOf(store::retrySeasonDownload)
+        if (seasonRetryCount > 0) refreshDownloads()
+        if (store.nextSeasonDownloadTask() != null) {
+            SeasonDownloadCoordinator.schedule(getApplication(), replace = true)
+        }
+
+        val singles = queuedBeforeChange.filter { it.batchId == null }
+        if (singles.isEmpty()) {
+            if (seasonRetryCount > 0) {
+                mutableState.update { it.copy(notice = "Restarting $seasonRetryCount queued episodes") }
+            }
+            return
+        }
+        viewModelScope.launch {
+            var restarted = 0
+            singles.forEach { entry ->
+                runCatching { restartDownloadEntry(entry) }
+                    .onSuccess { restarted += 1 }
+            }
+            refreshDownloads()
+            mutableState.update {
+                it.copy(
+                    notice = when {
+                        restarted + seasonRetryCount > 0 -> {
+                            "Restarting ${restarted + seasonRetryCount} queued downloads"
+                        }
+                        else -> "Queued downloads could not be restarted"
+                    },
+                )
+            }
+        }
     }
 
     fun setDarkTheme(enabled: Boolean) {
@@ -419,20 +474,97 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     fun isLiked(item: MediaItem?): Boolean = item != null && mutableState.value.liked.any { it.id == item.id }
 
     fun download(source: StreamSource) {
-        val media = mutableState.value.details?.item ?: mutableState.value.detailsSeed ?: return
-        runCatching { store.enqueueDownload(media, source) }
+        val current = mutableState.value
+        val media = current.details?.item ?: current.detailsSeed ?: return
+        val episode = current.details?.seasons
+            ?.firstOrNull { it.number == current.selectedSeason }
+            ?.episodes
+            ?.firstOrNull { it.number == current.selectedEpisode }
+        runCatching { store.enqueueDownload(media, source, episode) }
             .onSuccess {
                 refreshDownloads()
-                mutableState.update { state -> state.copy(sourcePickerVisible = false, notice = "Download started") }
+                mutableState.update { state -> state.copy(sourcePickerVisible = false, notice = "Added to Downloads") }
             }
             .onFailure { failure ->
                 mutableState.update { state -> state.copy(notice = failure.userMessage("Download could not start.")) }
             }
     }
 
+    fun downloadSeason(source: StreamSource) {
+        val current = mutableState.value
+        val details = current.details ?: return
+        val season = details.seasons.firstOrNull { it.number == current.selectedSeason } ?: return
+        val result = store.queueSeason(
+            media = details.item,
+            season = season.number,
+            episodes = season.episodes,
+            preference = DownloadPreference(source.resolution, source.audio),
+        )
+        mutableState.update { state ->
+            state.copy(
+                sourcePickerVisible = false,
+                notice = when {
+                    result.queuedCount == 0 -> "Season ${season.number} is already in Downloads"
+                    result.skippedCount > 0 -> {
+                        "Queued ${result.queuedCount} episodes · ${result.skippedCount} already added"
+                    }
+                    else -> "Season ${season.number} queued"
+                },
+            )
+        }
+        refreshDownloads()
+        if (result.queuedCount > 0) SeasonDownloadCoordinator.schedule(getApplication())
+    }
+
     fun removeDownload(entry: DownloadEntry) {
         store.removeDownload(entry)
         refreshDownloads()
+        if (entry.batchId != null) SeasonDownloadCoordinator.schedule(getApplication())
+    }
+
+    fun retryDownload(entry: DownloadEntry) {
+        if (entry.batchId != null) {
+            retrySeasonDownload(entry.batchId)
+            return
+        }
+        viewModelScope.launch {
+            mutableState.update { it.copy(notice = "Preparing download retry") }
+            runCatching { restartDownloadEntry(entry) }.onSuccess {
+                refreshDownloads()
+                mutableState.update { it.copy(notice = "Download restarted") }
+            }.onFailure { failure ->
+                mutableState.update { it.copy(notice = failure.userMessage("Download could not be retried.")) }
+            }
+        }
+    }
+
+    private suspend fun restartDownloadEntry(entry: DownloadEntry): DownloadEntry {
+        val sources = repository.sources(
+            subjectId = entry.media.id,
+            season = entry.season,
+            episode = entry.episode,
+            languageHint = entry.source.audio,
+        )
+        val source = selectSeasonDownloadSource(
+            sources,
+            DownloadPreference(entry.source.resolution, entry.source.audio),
+        ) ?: throw IOException("No replacement source is available")
+        return store.replaceDownload(entry, source)
+    }
+
+    fun cancelSeasonDownload(batchId: String) {
+        store.cancelSeasonDownload(batchId)
+        refreshDownloads()
+        mutableState.update { it.copy(notice = "Season download removed") }
+    }
+
+    fun retrySeasonDownload(batchId: String) {
+        val retryCount = store.retrySeasonDownload(batchId)
+        refreshDownloads()
+        if (retryCount > 0) {
+            SeasonDownloadCoordinator.schedule(getApplication())
+            mutableState.update { it.copy(notice = "Retrying $retryCount episodes") }
+        }
     }
 
     fun playDownload(entry: DownloadEntry) {
@@ -488,7 +620,20 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshDownloads() {
-        mutableState.update { it.copy(downloads = store.downloads()) }
+        val downloads = store.downloads()
+        val tasks = store.seasonDownloadTasks()
+        mutableState.update {
+            it.copy(
+                downloads = downloads,
+                seasonDownloads = store.seasonDownloadProgress(downloads, tasks),
+            )
+        }
+        val seasonActive = downloads.any { entry ->
+            entry.batchId != null && entry.state in setOf(DownloadState.Queued, DownloadState.Downloading)
+        }
+        if (!seasonActive && store.nextSeasonDownloadTask() != null) {
+            SeasonDownloadCoordinator.schedule(getApplication())
+        }
     }
 
     fun recordProgress(positionMs: Long, durationMs: Long, force: Boolean = false) {
@@ -569,12 +714,15 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun refreshLocal() {
+        val downloads = store.downloads()
+        val seasonTasks = store.seasonDownloadTasks()
         mutableState.update {
             it.copy(
                 watchlist = store.watchlist(),
                 liked = store.liked(),
                 history = store.history(),
-                downloads = store.downloads(),
+                downloads = downloads,
+                seasonDownloads = store.seasonDownloadProgress(downloads, seasonTasks),
                 localMedia = store.localMedia(),
                 settings = store.settings(),
             )
