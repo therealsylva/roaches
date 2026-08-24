@@ -44,12 +44,13 @@ jobs:
         run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Verify APK signature and permissions
+        if: always()
         run: |
           APK="app/build/outputs/apk/debug/roaches-debug.apk"
           test -f "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump permissions "$APK" | tee permissions.txt
-          grep -oE 'android\.permission\.[A-Z0-9_]+' permissions.txt | sort -u > actual-permissions.txt
+          grep -oE 'android\\.permission\\.[A-Z0-9_]+' permissions.txt | sort -u > actual-permissions.txt
           cat > expected-permissions.txt <<'EOF'
           android.permission.ACCESS_NETWORK_STATE
           android.permission.INTERNET
@@ -59,6 +60,7 @@ jobs:
           diff -u expected-permissions.txt actual-permissions.txt
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: roaches-debug-apk
           path: app/build/outputs/apk/debug/roaches-debug.apk
