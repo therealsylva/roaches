@@ -14,10 +14,6 @@ internal data class ClientIdentity(
     val installId: String,
     val sessionId: String,
     val forwardedIp: String,
-    val regionCode: String,
-    val localeTag: String,
-    val timezone: String,
-    val carrierCode: String,
 )
 
 internal class RequestSigner(private val identity: ClientIdentity) {
@@ -34,7 +30,7 @@ internal class RequestSigner(private val identity: ClientIdentity) {
         append(" (Linux; U; Android ")
         append(Build.VERSION.RELEASE.ifBlank { "13" })
         append("; ")
-        append(identity.localeTag.replace('-', '_'))
+        append("en_US")
         append("; ")
         append(Build.MODEL.ifBlank { "Android" })
         append("; Roaches/0.2)")
@@ -54,9 +50,9 @@ internal class RequestSigner(private val identity: ClientIdentity) {
         .put("model", Build.MODEL.ifBlank { "Android" })
         .put("system_language", "en")
         .put("net", "NETWORK_WIFI")
-        .put("region", identity.regionCode)
-        .put("timezone", identity.timezone)
-        .put("sp_code", identity.carrierCode)
+        .put("region", "US")
+        .put("timezone", "America/New_York")
+        .put("sp_code", "40401")
         .put("X-Play-Mode", "2")
         .toString()
 

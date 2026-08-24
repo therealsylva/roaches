@@ -2,16 +2,10 @@ package com.therealsylva.roaches.data.model
 
 enum class MediaKind { Movie, Series }
 
-enum class ContentRegion(
-    val apiCode: String,
-    val label: String,
-    internal val localeTag: String,
-    internal val timezone: String,
-    internal val carrierCode: String,
-) {
-    GlobalEnglish("US", "Global English", "en-US", "America/New_York", "310260"),
-    UnitedKingdom("GB", "United Kingdom", "en-GB", "Europe/London", "23415"),
-    Nigeria("NG", "Nigeria", "en-NG", "Africa/Lagos", "62130"),
+enum class ContentRegion(val label: String) {
+    GlobalEnglish("Global English"),
+    UnitedKingdom("United Kingdom"),
+    Nigeria("Nigeria"),
 }
 
 enum class PlaybackQuality(val height: Int, val label: String) {

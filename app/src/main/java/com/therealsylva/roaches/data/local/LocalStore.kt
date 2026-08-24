@@ -29,17 +29,12 @@ class LocalStore(context: Context) {
     internal fun clientIdentity(): ClientIdentity {
         val installId = valueOrCreate("install_id") { UUID.randomUUID().toString() }
         val sessionId = valueOrCreate("session_id") { UUID.randomUUID().toString() }
-        val region = settings().contentRegion
         val hash = installId.hashCode().toUInt().toLong()
         val forwardedIp = "$PROVIDER_IP_PREFIX.${(hash shr 8) % 253 + 1}.${hash % 253 + 1}"
         return ClientIdentity(
             installId = installId,
             sessionId = sessionId,
             forwardedIp = forwardedIp,
-            regionCode = region.apiCode,
-            localeTag = region.localeTag,
-            timezone = region.timezone,
-            carrierCode = region.carrierCode,
         )
     }
 

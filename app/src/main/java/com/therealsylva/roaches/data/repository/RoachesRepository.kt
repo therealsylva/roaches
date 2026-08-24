@@ -183,7 +183,7 @@ private fun JSONObject.variantPenalty(): Int {
     return when {
         label.contains("original", ignoreCase = true) -> 0
         label.contains("english", ignoreCase = true) || title.contains("[english]", ignoreCase = true) -> 1
-        REGIONAL_MARKER.containsMatchIn("$label $title") -> 2
+        INDIA_MARKER.containsMatchIn("$label $title") -> 2
         else -> 1
     }
 }
@@ -206,15 +206,25 @@ private fun JSONObject.preferredSubjectId(fallback: String): String {
 }
 
 private fun String.regionalPenalty(region: ContentRegion): Int = when (region) {
-    ContentRegion.GlobalEnglish,
-    ContentRegion.UnitedKingdom,
-    ContentRegion.Nigeria,
-    -> if (REGIONAL_MARKER.containsMatchIn(this)) 1 else 0
+    ContentRegion.GlobalEnglish -> if (INDIA_MARKER.containsMatchIn(this)) 1 else 0
+    ContentRegion.UnitedKingdom -> when {
+        UK_MARKER.containsMatchIn(this) -> 0
+        INDIA_MARKER.containsMatchIn(this) -> 2
+        else -> 1
+    }
+    ContentRegion.Nigeria -> when {
+        NIGERIA_MARKER.containsMatchIn(this) -> 0
+        INDIA_MARKER.containsMatchIn(this) -> 2
+        else -> 1
+    }
 }
 
-private val REGIONAL_MARKER = Regex(
+private val INDIA_MARKER = Regex(
     "(?i)\\b(india|bollywood|hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi)\\b",
 )
+private val UK_MARKER = Regex("(?i)\\b(united kingdom|british|britain|england|english)\\b")
+private val NIGERIA_MARKER = Regex("(?i)\\b(nigeria|nigerian|nollywood)\\b")
+private val DECORATIVE_SYMBOL = Regex("[\\p{So}\\p{Sk}\\uFE0F\\u200D]")
 
 private fun JSONObject.toMediaItem(): MediaItem? {
     val id = string("subjectId", "id") ?: return null
@@ -301,12 +311,12 @@ private fun JSONObject.stringList(vararg keys: String): List<String> = keys.firs
 }.orEmpty()
 
 private fun normalizeShelfTitle(raw: String, index: Int): String {
-    val cleaned = raw.replace(Regex("\\s+"), " ").trim()
+    val cleaned = raw.replace(DECORATIVE_SYMBOL, " ").replace(Regex("\\s+"), " ").trim()
     return cleaned.takeIf(String::isNotBlank) ?: if (index == 0) "Featured" else "More to watch"
 }
 
 private fun cleanTitle(raw: String): String {
-    var title = raw.trim()
+    var title = raw.replace(DECORATIVE_SYMBOL, " ").replace(Regex("\\s+"), " ").trim()
     while (title.startsWith('[') && title.contains(']')) {
         title = title.substringAfter(']').trim()
     }
