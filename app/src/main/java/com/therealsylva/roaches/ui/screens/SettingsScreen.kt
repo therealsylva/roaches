@@ -160,7 +160,7 @@ private fun SettingsSection(
             Text(description, style = MaterialTheme.typography.bodyMedium, color = RoachesColors.InkMuted)
         }
         HorizontalDivider(color = RoachesColors.SurfaceQuiet)
-        Column(content = content)
+        Column { content() }
     }
 }
 

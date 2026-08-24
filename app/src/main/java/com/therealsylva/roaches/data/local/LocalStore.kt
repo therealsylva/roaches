@@ -19,6 +19,10 @@ import org.json.JSONObject
 import java.util.UUID
 
 class LocalStore(context: Context) {
+    companion object {
+        private const val PROVIDER_IP_PREFIX = "103.241"
+    }
+
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences("roaches_local", Context.MODE_PRIVATE)
 
@@ -27,7 +31,7 @@ class LocalStore(context: Context) {
         val sessionId = valueOrCreate("session_id") { UUID.randomUUID().toString() }
         val region = settings().contentRegion
         val hash = installId.hashCode().toUInt().toLong()
-        val forwardedIp = "${region.forwardedIpPrefix}.${(hash shr 8) % 253 + 1}.${hash % 253 + 1}"
+        val forwardedIp = "$PROVIDER_IP_PREFIX.${(hash shr 8) % 253 + 1}.${hash % 253 + 1}"
         return ClientIdentity(
             installId = installId,
             sessionId = sessionId,

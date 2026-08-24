@@ -14,6 +14,7 @@ import com.therealsylva.roaches.data.model.SubtitleTrack
 import com.therealsylva.roaches.data.remote.MovieBoxApi
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 class RoachesRepository(store: LocalStore) {
     private val settings = store.settings()
@@ -27,9 +28,7 @@ class RoachesRepository(store: LocalStore) {
                 val group = groups.optJSONObject(index) ?: return@repeat
                 val title = group.string("title", "name").orEmpty()
                 val subjects = group.optJSONArray("subjects") ?: return@repeat
-                val items = subjects.mediaItems()
-                    .distinctBy(MediaItem::id)
-                    .prioritizeFor(settings.contentRegion)
+                val items = subjects.catalogueItems(settings.contentRegion)
                 if (items.isNotEmpty()) {
                     add(Shelf("home-$index", normalizeShelfTitle(title, index), items))
                 }
@@ -37,12 +36,12 @@ class RoachesRepository(store: LocalStore) {
         }.sortedBy { it.title.regionalPenalty(settings.contentRegion) }
         return shelves.ifEmpty {
             val fallback = when (payload) {
-                is JSONArray -> payload.mediaItems()
+                is JSONArray -> payload.catalogueItems(settings.contentRegion)
                 is JSONObject -> payload.optJSONArray("subjects")
-                    ?.mediaItems()
+                    ?.catalogueItems(settings.contentRegion)
                     .orEmpty()
                 else -> emptyList()
-            }.prioritizeFor(settings.contentRegion)
+            }
             if (fallback.isEmpty()) emptyList() else listOf(Shelf("discover", "Discover", fallback))
         }
     }
@@ -53,7 +52,13 @@ class RoachesRepository(store: LocalStore) {
     }
 
     suspend fun details(seed: MediaItem): MediaDetails {
-        val json = api.details(seed.id)
+        val initial = api.details(seed.id)
+        val preferredId = initial.preferredSubjectId(seed.id)
+        val json = if (preferredId == seed.id) {
+            initial
+        } else {
+            runCatching { api.details(preferredId) }.getOrDefault(initial)
+        }
         val parsed = json.toMediaItem() ?: seed
         val item = parsed.copy(
             posterUrl = parsed.posterUrl ?: seed.posterUrl,
@@ -123,18 +128,30 @@ class RoachesRepository(store: LocalStore) {
     }
 }
 
-private fun JSONArray.mediaItems(): List<MediaItem> = buildList {
+private data class RankedMedia(val item: MediaItem, val penalty: Int, val index: Int)
+
+private fun JSONArray.catalogueItems(region: ContentRegion): List<MediaItem> = buildList {
     repeat(length()) { index ->
-        optJSONObject(index)?.toMediaItem()?.let(::add)
+        val value = optJSONObject(index) ?: return@repeat
+        value.toMediaItem()?.let { item -> add(RankedMedia(item, value.cataloguePenalty(region), index)) }
     }
-}
+}.sortedWith(compareBy<RankedMedia>(RankedMedia::penalty).thenBy(RankedMedia::index))
+    .distinctBy { ranked ->
+        with(ranked.item) { "${title.lowercase(Locale.US)}-$year-$kind" }
+    }
+    .map(RankedMedia::item)
 
 internal fun parseSearchResults(payload: Any, query: String): List<MediaItem> {
     val subjects = buildList {
         collectMediaObjects(payload, this)
     }
-    return JSONArray(subjects).mediaItems()
-        .distinctBy(MediaItem::id)
+    return subjects.mapIndexedNotNull { index, value ->
+        value.toMediaItem()?.let { item -> RankedMedia(item, value.variantPenalty(), index) }
+    }.sortedWith(compareBy<RankedMedia>(RankedMedia::penalty).thenBy(RankedMedia::index))
+        .distinctBy { ranked ->
+            with(ranked.item) { "${title.lowercase(Locale.US)}-$year-$kind" }
+        }
+        .map(RankedMedia::item)
         .sortedWith(
             compareByDescending<MediaItem> { it.title.equals(query, ignoreCase = true) }
                 .thenByDescending { it.title.startsWith(query, ignoreCase = true) }
@@ -154,14 +171,39 @@ private fun collectMediaObjects(value: Any?, output: MutableList<JSONObject>) {
     }
 }
 
-private fun List<MediaItem>.prioritizeFor(region: ContentRegion): List<MediaItem> =
-    withIndex().sortedWith(
-        compareBy<IndexedValue<MediaItem>> { it.value.regionalPenalty(region) }
-            .thenBy(IndexedValue<MediaItem>::index),
-    ).map(IndexedValue<MediaItem>::value)
+private fun JSONObject.cataloguePenalty(region: ContentRegion): Int = listOfNotNull(
+    string("title", "name"),
+    string("language", "lanName", "audio", "originalLanguage"),
+    string("countryName", "country", "area"),
+).joinToString(" ").regionalPenalty(region)
 
-private fun MediaItem.regionalPenalty(region: ContentRegion): Int =
-    listOfNotNull(title, description).joinToString(" ").regionalPenalty(region)
+private fun JSONObject.variantPenalty(): Int {
+    val label = string("language", "lanName", "audio", "originalLanguage").orEmpty()
+    val title = string("title", "name").orEmpty()
+    return when {
+        label.contains("original", ignoreCase = true) -> 0
+        label.contains("english", ignoreCase = true) || title.contains("[english]", ignoreCase = true) -> 1
+        REGIONAL_MARKER.containsMatchIn("$label $title") -> 2
+        else -> 1
+    }
+}
+
+private fun JSONObject.preferredSubjectId(fallback: String): String {
+    val dubs = optJSONArray("dubs") ?: return fallback
+    return buildList {
+        repeat(dubs.length()) { index ->
+            val dub = dubs.optJSONObject(index) ?: return@repeat
+            val id = dub.string("subjectId", "id") ?: return@repeat
+            val language = dub.string("lanName", "language", "name").orEmpty()
+            val priority = when {
+                language.contains("original", ignoreCase = true) -> 0
+                language.contains("english", ignoreCase = true) -> 1
+                else -> 2
+            }
+            add(Triple(priority, index, id))
+        }
+    }.minWithOrNull(compareBy<Triple<Int, Int, String>> { it.first }.thenBy { it.second })?.third ?: fallback
+}
 
 private fun String.regionalPenalty(region: ContentRegion): Int = when (region) {
     ContentRegion.GlobalEnglish,
