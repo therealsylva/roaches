@@ -72,4 +72,13 @@ class RequestSignerTest {
             "https://api.inmoviebox.com",
         ).inOrder()
     }
+
+    @Test
+    fun episodeResourcePathMatchesTheUpstreamScopedRequest() {
+        assertThat(MovieBoxApi.episodeResourcePath("show-id", season = 2, episode = 7, page = 3))
+            .isEqualTo(
+                "/wefeed-mobile-bff/subject-api/resource?subjectId=show-id" +
+                    "&se=2&ep=7&page=3&perPage=20",
+            )
+    }
 }

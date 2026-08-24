@@ -19,9 +19,24 @@ class ModelsTest {
     }
 
     @Test
+    fun sourceRetainsUsefulProviderMetadata() {
+        val source = StreamSource(
+            resourceId = "id",
+            url = "https://example.invalid/video",
+            filename = "Film.1080p.mkv",
+            durationSeconds = 7_200,
+            uploader = "Cinema source",
+        )
+
+        assertThat(source.filename).isEqualTo("Film.1080p.mkv")
+        assertThat(source.durationSeconds).isEqualTo(7_200L)
+        assertThat(source.uploader).isEqualTo("Cinema source")
+    }
+
+    @Test
     fun settingsDefaultToGlobalEnglishWithoutTracking() {
         val settings = AppSettings()
         assertThat(settings.contentRegion).isEqualTo(ContentRegion.GlobalEnglish)
-        assertThat(settings.wifiOnlyDownloads).isTrue()
+        assertThat(settings.wifiOnlyDownloads).isFalse()
     }
 }

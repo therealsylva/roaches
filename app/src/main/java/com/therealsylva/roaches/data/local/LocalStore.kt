@@ -7,23 +7,100 @@ import android.os.Environment
 import com.therealsylva.roaches.data.model.AppSettings
 import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.DownloadEntry
+import com.therealsylva.roaches.data.model.DownloadPreference
 import com.therealsylva.roaches.data.model.DownloadState
+import com.therealsylva.roaches.data.model.Episode
 import com.therealsylva.roaches.data.model.LocalMediaEntry
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
 import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.PreferredAudio
+import com.therealsylva.roaches.data.model.SeasonDownloadProgress
+import com.therealsylva.roaches.data.model.SeasonDownloadTask
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.WatchEntry
 import com.therealsylva.roaches.data.remote.ClientIdentity
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.UUID
+
+data class SeasonQueueResult(
+    val batchId: String?,
+    val queuedCount: Int,
+    val skippedCount: Int,
+)
+
+internal fun missingSeasonEpisodes(
+    subjectId: String,
+    season: Int,
+    episodes: List<Episode>,
+    existingKeys: Set<String>,
+): List<Episode> = episodes.filter { episode ->
+    com.therealsylva.roaches.data.model.downloadTargetKey(subjectId, season, episode.number) !in existingKeys
+}
+
+internal fun downloadFileName(
+    title: String,
+    season: Int,
+    episode: Int,
+    source: StreamSource,
+): String {
+    val safeTitle = title
+        .replace(Regex("[^A-Za-z0-9._ -]"), "")
+        .trim()
+        .take(120)
+        .trimEnd('.', ' ')
+        .ifBlank { "Roaches" }
+    val extension = downloadFileExtension(source.filename, source.url)
+    val episodeSuffix = if (season > 0 && episode > 0) {
+        "-S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}"
+    } else {
+        ""
+    }
+    return "$safeTitle$episodeSuffix-${source.qualityLabel}.$extension"
+}
+
+private val DOWNLOAD_MEDIA_EXTENSIONS = setOf("mp4", "mkv", "webm", "m4v", "ts")
+
+internal fun downloadFileExtension(filename: String?, url: String): String = sequenceOf(filename, url)
+    .mapNotNull { value ->
+        value
+            ?.substringBefore('?')
+            ?.substringBefore('#')
+            ?.substringAfterLast('/')
+            ?.substringAfterLast('.', "")
+            ?.lowercase(Locale.US)
+            ?.takeIf(DOWNLOAD_MEDIA_EXTENSIONS::contains)
+    }
+    .firstOrNull()
+    ?: "mp4"
+
+internal fun shouldRequeueDownload(state: DownloadState): Boolean = state in setOf(
+    DownloadState.Queued,
+    DownloadState.Failed,
+    DownloadState.Missing,
+)
+
+internal fun seasonRetryAvailable(
+    states: Iterable<DownloadState>,
+    taskAttempts: Iterable<Int>,
+    maxAttempts: Int,
+): Boolean = states.any(::shouldRequeueDownload) || taskAttempts.any { it >= maxAttempts }
+
+internal fun resolvedDownloadUri(status: Int, cursorUri: String?, managerUri: String?): String? {
+    val stored = cursorUri?.takeIf(String::isNotBlank)
+    if (status != DownloadManager.STATUS_SUCCESSFUL) return stored
+    return stored ?: managerUri?.takeIf(String::isNotBlank)
+}
 
 class LocalStore(context: Context) {
     companion object {
         private const val PROVIDER_IP_PREFIX = "103.241"
+        private const val SEASON_DOWNLOAD_QUEUE = "season_download_queue_v1"
+        private const val MAX_SEASON_ATTEMPTS = 3
+        private val DOWNLOAD_LOCK = Any()
     }
 
     private val appContext = context.applicationContext
@@ -56,7 +133,7 @@ class LocalStore(context: Context) {
         contentRegion = preferences.enumValue("content_region", ContentRegion.GlobalEnglish),
         playbackQuality = preferences.enumValue("playback_quality", PlaybackQuality.Auto),
         preferredAudio = preferences.enumValue("preferred_audio", PreferredAudio.English),
-        wifiOnlyDownloads = preferences.getBoolean("wifi_only_downloads", true),
+        wifiOnlyDownloads = preferences.getBoolean("wifi_only_downloads", false),
         darkTheme = preferences.getBoolean("dark_theme", true),
     )
 
@@ -147,20 +224,180 @@ class LocalStore(context: Context) {
         writeArray("history", emptyList<JSONObject>())
     }
 
-    fun downloads(): List<DownloadEntry> = readArray("downloads").objects()
-        .mapNotNull(::downloadFromJson)
+    fun downloads(): List<DownloadEntry> = storedDownloads()
         .sortedByDescending(DownloadEntry::createdAt)
         .map(::queryDownload)
 
-    fun enqueueDownload(media: MediaItem, source: StreamSource): DownloadEntry {
-        val manager = appContext.getSystemService(DownloadManager::class.java)
-        val safeTitle = media.title.replace(Regex("[^A-Za-z0-9._ -]"), "").trim().ifBlank { "Roaches" }
-        val extension = source.filename
-            ?.substringAfterLast('.', "mp4")
-            ?.takeIf { it.length in 2..5 }
-            ?: "mp4"
+    fun seasonDownloadTasks(): List<SeasonDownloadTask> = decodeSeasonDownloadTasks(
+        preferences.getString(SEASON_DOWNLOAD_QUEUE, null),
+    ).sortedBy(SeasonDownloadTask::createdAt)
+
+    fun queueSeason(
+        media: MediaItem,
+        season: Int,
+        episodes: List<Episode>,
+        preference: DownloadPreference,
+    ): SeasonQueueResult = synchronized(DOWNLOAD_LOCK) {
+        val candidates = episodes
+            .filter { it.season == season && it.number > 0 }
+            .distinctBy(Episode::number)
+        val existingKeys = buildSet {
+            storedDownloads().mapTo(this, DownloadEntry::targetKey)
+            seasonDownloadTasks().mapTo(this, SeasonDownloadTask::targetKey)
+        }
+        val missing = missingSeasonEpisodes(media.id, season, candidates, existingKeys)
+        if (missing.isEmpty()) {
+            return@synchronized SeasonQueueResult(null, 0, candidates.size)
+        }
+
+        val batchId = UUID.randomUUID().toString()
+        val createdAt = System.currentTimeMillis()
+        val tasks = missing.mapIndexed { index, episode ->
+            SeasonDownloadTask(
+                id = UUID.randomUUID().toString(),
+                batchId = batchId,
+                media = media,
+                season = season,
+                episode = episode.number,
+                episodeTitle = episode.title,
+                preference = preference,
+                batchSize = missing.size,
+                createdAt = createdAt + index,
+            )
+        }
+        writeSeasonDownloadTasks(seasonDownloadTasks() + tasks)
+        SeasonQueueResult(batchId, tasks.size, candidates.size - tasks.size)
+    }
+
+    fun nextSeasonDownloadTask(): SeasonDownloadTask? = seasonDownloadTasks()
+        .firstOrNull { it.attempts < MAX_SEASON_ATTEMPTS }
+
+    fun hasActiveSeasonDownload(): Boolean = downloads().any { entry ->
+        entry.batchId != null && entry.state in setOf(DownloadState.Queued, DownloadState.Downloading)
+    }
+
+    fun ownsSeasonDownload(downloadId: Long): Boolean =
+        storedDownloads().any { it.downloadId == downloadId && it.batchId != null }
+
+    fun recordSeasonTaskFailure(taskId: String, message: String): Boolean = synchronized(DOWNLOAD_LOCK) {
+        var terminal = true
+        val updated = seasonDownloadTasks().map { task ->
+            if (task.id != taskId) return@map task
+            val attempts = task.attempts + 1
+            terminal = attempts >= MAX_SEASON_ATTEMPTS
+            task.copy(
+                attempts = attempts,
+                lastError = message.trim().take(160).ifBlank { "Source could not be prepared" },
+            )
+        }
+        writeSeasonDownloadTasks(updated)
+        terminal
+    }
+
+    fun startSeasonDownload(task: SeasonDownloadTask, source: StreamSource): DownloadEntry? =
+        synchronized(DOWNLOAD_LOCK) {
+            if (storedDownloads().any { it.targetKey == task.targetKey }) {
+                writeSeasonDownloadTasks(seasonDownloadTasks().filterNot { it.id == task.id })
+                return@synchronized null
+            }
+            enqueueDownloadLocked(
+                media = task.media,
+                source = source,
+                episode = Episode(task.season, task.episode, task.episodeTitle),
+                batchId = task.batchId,
+                batchSize = task.batchSize,
+                ignoredTaskId = task.id,
+            )
+        }
+
+    fun enqueueDownload(
+        media: MediaItem,
+        source: StreamSource,
+        episode: Episode? = null,
+    ): DownloadEntry = synchronized(DOWNLOAD_LOCK) {
+        enqueueDownloadLocked(media, source, episode)
+    }
+
+    fun replaceDownload(entry: DownloadEntry, source: StreamSource): DownloadEntry =
+        synchronized(DOWNLOAD_LOCK) {
+            val stored = storedDownloads()
+            val persisted = stored.firstOrNull { it.downloadId == entry.downloadId }
+                ?: error("This download has changed. Refresh Downloads and try again.")
+            check(shouldRequeueDownload(queryDownload(persisted).state)) {
+                "This download is already running or complete."
+            }
+            val manager = appContext.getSystemService(DownloadManager::class.java)
+
+            // Keep the persisted row until a replacement has been accepted. If enqueueing
+            // fails, the old row becomes Missing and remains available for another retry.
+            manager.remove(persisted.downloadId)
+            val replacement = enqueueNativeDownload(
+                media = persisted.media,
+                source = source,
+                seasonNumber = persisted.season,
+                episodeNumber = persisted.episode,
+                episodeTitle = persisted.episodeTitle,
+                batchId = persisted.batchId,
+                batchSize = persisted.batchSize,
+            )
+            writeDownloads(listOf(replacement) + stored.filterNot { it.downloadId == persisted.downloadId })
+            replacement
+        }
+
+    private fun enqueueDownloadLocked(
+        media: MediaItem,
+        source: StreamSource,
+        episode: Episode? = null,
+        batchId: String? = null,
+        batchSize: Int = 0,
+        ignoredTaskId: String? = null,
+    ): DownloadEntry {
+        val seasonNumber = episode?.season ?: 0
+        val episodeNumber = episode?.number ?: 0
+        val targetKey = com.therealsylva.roaches.data.model.downloadTargetKey(
+            media.id,
+            seasonNumber,
+            episodeNumber,
+        )
+        val duplicate = storedDownloads().any { it.targetKey == targetKey } ||
+            seasonDownloadTasks().any { it.id != ignoredTaskId && it.targetKey == targetKey }
+        check(!duplicate) { "This title is already in Downloads." }
+
+        val entry = enqueueNativeDownload(
+            media = media,
+            source = source,
+            seasonNumber = seasonNumber,
+            episodeNumber = episodeNumber,
+            episodeTitle = episode?.title,
+            batchId = batchId,
+            batchSize = batchSize,
+        )
+        val current = storedDownloads().filterNot { it.downloadId == entry.downloadId }.toMutableList()
+        current.add(0, entry)
+        writeDownloads(current)
+        if (ignoredTaskId != null) {
+            writeSeasonDownloadTasks(seasonDownloadTasks().filterNot { it.id == ignoredTaskId })
+        }
+        return entry
+    }
+
+    private fun enqueueNativeDownload(
+        media: MediaItem,
+        source: StreamSource,
+        seasonNumber: Int,
+        episodeNumber: Int,
+        episodeTitle: String?,
+        batchId: String?,
+        batchSize: Int,
+    ): DownloadEntry {
+        val episodeSuffix = if (seasonNumber > 0 && episodeNumber > 0) {
+            "-S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}"
+        } else {
+            ""
+        }
+        val episodeLabel = if (episodeSuffix.isBlank()) "" else " · S$seasonNumber E$episodeNumber"
         val request = DownloadManager.Request(Uri.parse(source.url))
-            .setTitle(media.title)
+            .setTitle(media.title + episodeLabel)
             .setDescription("${source.qualityLabel} · Roaches")
             .setMimeType("video/*")
             .setAllowedOverMetered(!settings().wifiOnlyDownloads)
@@ -169,48 +406,185 @@ class LocalStore(context: Context) {
             .setDestinationInExternalFilesDir(
                 appContext,
                 Environment.DIRECTORY_MOVIES,
-                "$safeTitle-${source.qualityLabel}.$extension",
+                downloadFileName(media.title, seasonNumber, episodeNumber, source),
             )
-        val id = manager.enqueue(request)
-        val entry = DownloadEntry(id, media, source, System.currentTimeMillis())
-        val current = downloads().filterNot { it.downloadId == id }.toMutableList()
-        current.add(0, entry)
-        writeArray("downloads", current.map(::downloadToJson))
-        return entry
+        val downloadId = appContext.getSystemService(DownloadManager::class.java).enqueue(request)
+        return DownloadEntry(
+            downloadId = downloadId,
+            media = media,
+            source = source,
+            createdAt = System.currentTimeMillis(),
+            season = seasonNumber,
+            episode = episodeNumber,
+            episodeTitle = episodeTitle,
+            batchId = batchId,
+            batchSize = batchSize,
+        )
     }
 
-    fun removeDownload(entry: DownloadEntry) {
+    fun removeDownload(entry: DownloadEntry) = synchronized(DOWNLOAD_LOCK) {
         appContext.getSystemService(DownloadManager::class.java).remove(entry.downloadId)
-        writeArray(
-            "downloads",
-            downloads().filterNot { it.downloadId == entry.downloadId }.map(::downloadToJson),
-        )
+        val remaining = storedDownloads().filterNot { it.downloadId == entry.downloadId }
+        val batchId = entry.batchId
+        if (batchId == null) {
+            writeDownloads(remaining)
+            return@synchronized
+        }
+        val tasks = seasonDownloadTasks()
+        val remainingInBatch = remaining.count { it.batchId == batchId } + tasks.count { it.batchId == batchId }
+        val resizedEntries = remaining.map { candidate ->
+            if (candidate.batchId == batchId) candidate.copy(batchSize = remainingInBatch) else candidate
+        }
+        val resizedTasks = tasks.map { task ->
+            if (task.batchId == batchId) task.copy(batchSize = remainingInBatch) else task
+        }
+        writeDownloads(resizedEntries)
+        writeSeasonDownloadTasks(resizedTasks)
+    }
+
+    fun cancelSeasonDownload(batchId: String) = synchronized(DOWNLOAD_LOCK) {
+        val entries = storedDownloads()
+        val ids = entries.filter { it.batchId == batchId }.map(DownloadEntry::downloadId).toLongArray()
+        if (ids.isNotEmpty()) appContext.getSystemService(DownloadManager::class.java).remove(*ids)
+        writeDownloads(entries.filterNot { it.batchId == batchId })
+        writeSeasonDownloadTasks(seasonDownloadTasks().filterNot { it.batchId == batchId })
+    }
+
+    fun retrySeasonDownload(batchId: String): Int = synchronized(DOWNLOAD_LOCK) {
+        val queried = downloads()
+        val retryableEntries = queried.filter {
+            it.batchId == batchId && it.season > 0 && it.episode > 0 && shouldRequeueDownload(it.state)
+        }
+        val entriesToKeep = storedDownloads().filterNot { stored ->
+            retryableEntries.any { it.downloadId == stored.downloadId }
+        }
+        val existingTasks = seasonDownloadTasks()
+        val resetTasks = existingTasks.map { task ->
+            if (task.batchId == batchId && task.attempts >= MAX_SEASON_ATTEMPTS) {
+                task.copy(attempts = 0, lastError = null)
+            } else {
+                task
+            }
+        }.toMutableList()
+        val knownKeys = resetTasks.mapTo(mutableSetOf(), SeasonDownloadTask::targetKey)
+        retryableEntries.forEach { entry ->
+            if (!knownKeys.add(entry.targetKey)) return@forEach
+            resetTasks += SeasonDownloadTask(
+                id = UUID.randomUUID().toString(),
+                batchId = batchId,
+                media = entry.media,
+                season = entry.season,
+                episode = entry.episode,
+                episodeTitle = entry.episodeTitle ?: "Episode ${entry.episode}",
+                preference = DownloadPreference(entry.source.resolution, entry.source.audio),
+                batchSize = entry.batchSize,
+                createdAt = System.currentTimeMillis() + resetTasks.size,
+            )
+        }
+        retryableEntries.forEach { entry ->
+            appContext.getSystemService(DownloadManager::class.java).remove(entry.downloadId)
+        }
+        writeDownloads(entriesToKeep)
+        writeSeasonDownloadTasks(resetTasks)
+        retryableEntries.size + existingTasks.count {
+            it.batchId == batchId && it.attempts >= MAX_SEASON_ATTEMPTS
+        }
+    }
+
+    fun seasonDownloadProgress(
+        downloads: List<DownloadEntry> = downloads(),
+        tasks: List<SeasonDownloadTask> = seasonDownloadTasks(),
+    ): List<SeasonDownloadProgress> {
+        val batchIds = (downloads.mapNotNull(DownloadEntry::batchId) + tasks.map(SeasonDownloadTask::batchId))
+            .distinct()
+        return batchIds.mapNotNull { batchId ->
+            val entries = downloads.filter { it.batchId == batchId }
+            val pending = tasks.filter { it.batchId == batchId }
+            val media = entries.firstOrNull()?.media ?: pending.firstOrNull()?.media ?: return@mapNotNull null
+            val season = entries.firstOrNull()?.season ?: pending.firstOrNull()?.season ?: return@mapNotNull null
+            val total = (entries.map(DownloadEntry::batchSize) + pending.map(SeasonDownloadTask::batchSize))
+                .maxOrNull()
+                ?.coerceAtLeast(entries.size + pending.size)
+                ?: return@mapNotNull null
+            val active = entries.firstOrNull {
+                it.state in setOf(DownloadState.Queued, DownloadState.Downloading)
+            }
+            SeasonDownloadProgress(
+                batchId = batchId,
+                media = media,
+                season = season,
+                totalCount = total,
+                readyCount = entries.count { it.state == DownloadState.Complete },
+                failedCount = entries.count { it.state in setOf(DownloadState.Failed, DownloadState.Missing) } +
+                    pending.count { it.attempts >= MAX_SEASON_ATTEMPTS },
+                queuedCount = pending.count { it.attempts < MAX_SEASON_ATTEMPTS } +
+                    entries.count { it.state == DownloadState.Queued },
+                activeEpisode = active?.episode,
+                activeProgress = active?.progress ?: 0f,
+                statusMessage = active?.statusMessage
+                    ?: pending.firstOrNull { it.attempts >= MAX_SEASON_ATTEMPTS }?.lastError,
+                retryAvailable = seasonRetryAvailable(
+                    states = entries.map(DownloadEntry::state),
+                    taskAttempts = pending.map(SeasonDownloadTask::attempts),
+                    maxAttempts = MAX_SEASON_ATTEMPTS,
+                ),
+            )
+        }.sortedByDescending { progress ->
+            (downloads.filter { it.batchId == progress.batchId }.maxOfOrNull(DownloadEntry::createdAt)
+                ?: tasks.filter { it.batchId == progress.batchId }.maxOfOrNull(SeasonDownloadTask::createdAt)
+                ?: 0L)
+        }
     }
 
     private fun queryDownload(entry: DownloadEntry): DownloadEntry {
         val manager = appContext.getSystemService(DownloadManager::class.java)
         return runCatching {
             manager.query(DownloadManager.Query().setFilterById(entry.downloadId)).use { cursor ->
-                if (!cursor.moveToFirst()) return@use entry.copy(state = DownloadState.Missing)
+                if (!cursor.moveToFirst()) {
+                    return@use entry.copy(state = DownloadState.Missing, statusMessage = "File unavailable")
+                }
                 val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                 val downloaded = cursor.getLong(
                     cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
                 )
                 val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                val uri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                val cursorUri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                val managerUri = if (
+                    status == DownloadManager.STATUS_SUCCESSFUL && cursorUri.isNullOrBlank()
+                ) {
+                    runCatching { manager.getUriForDownloadedFile(entry.downloadId)?.toString() }
+                        .getOrNull()
+                } else {
+                    null
+                }
+                val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                 entry.copy(
                     state = when (status) {
                         DownloadManager.STATUS_PENDING -> DownloadState.Queued
-                        DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PAUSED -> DownloadState.Downloading
+                        DownloadManager.STATUS_RUNNING -> DownloadState.Downloading
+                        DownloadManager.STATUS_PAUSED -> DownloadState.Queued
                         DownloadManager.STATUS_SUCCESSFUL -> DownloadState.Complete
                         DownloadManager.STATUS_FAILED -> DownloadState.Failed
                         else -> DownloadState.Missing
                     },
                     progress = if (total > 0L) (downloaded.toFloat() / total).coerceIn(0f, 1f) else 0f,
-                    localUri = uri,
+                    localUri = resolvedDownloadUri(status, cursorUri, managerUri),
+                    statusMessage = downloadStatusMessage(status, reason, settings().wifiOnlyDownloads),
                 )
             }
-        }.getOrDefault(entry.copy(state = DownloadState.Missing))
+        }.getOrDefault(entry.copy(state = DownloadState.Missing, statusMessage = "File unavailable"))
+    }
+
+    private fun storedDownloads(): List<DownloadEntry> = decodeDownloadEntries(
+        preferences.getString("downloads", null),
+    )
+
+    private fun writeDownloads(downloads: List<DownloadEntry>) {
+        preferences.edit().putString("downloads", encodeDownloadEntries(downloads)).apply()
+    }
+
+    private fun writeSeasonDownloadTasks(tasks: List<SeasonDownloadTask>) {
+        preferences.edit().putString(SEASON_DOWNLOAD_QUEUE, encodeSeasonDownloadTasks(tasks)).apply()
     }
 
     private fun valueOrCreate(key: String, create: () -> String): String {
@@ -321,6 +695,8 @@ private fun streamToJson(source: StreamSource) = JSONObject()
     .put("audio", source.audio)
     .put("size", source.sizeBytes)
     .put("filename", source.filename)
+    .put("duration", source.durationSeconds)
+    .put("uploader", source.uploader)
 
 private fun streamFromJson(json: JSONObject): StreamSource? {
     val url = json.optString("url").takeIf(String::isNotBlank) ?: return null
@@ -332,6 +708,8 @@ private fun streamFromJson(json: JSONObject): StreamSource? {
         audio = json.nullableString("audio"),
         sizeBytes = json.optLong("size").takeIf { it > 0L },
         filename = json.nullableString("filename"),
+        durationSeconds = json.optLong("duration").takeIf { it > 0L },
+        uploader = json.nullableString("uploader"),
     )
 }
 
@@ -340,12 +718,79 @@ private fun downloadToJson(entry: DownloadEntry) = JSONObject()
     .put("media", mediaToJson(entry.media))
     .put("source", streamToJson(entry.source))
     .put("created", entry.createdAt)
+    .put("season", entry.season)
+    .put("episode", entry.episode)
+    .put("episodeTitle", entry.episodeTitle)
+    .put("batch", entry.batchId)
+    .put("batchSize", entry.batchSize)
 
 private fun downloadFromJson(json: JSONObject): DownloadEntry? {
     val media = json.optJSONObject("media")?.let(::mediaFromJson) ?: return null
     val source = json.optJSONObject("source")?.let(::streamFromJson) ?: return null
-    return DownloadEntry(json.optLong("id"), media, source, json.optLong("created"))
+    return DownloadEntry(
+        downloadId = json.optLong("id"),
+        media = media,
+        source = source,
+        createdAt = json.optLong("created"),
+        season = json.optInt("season"),
+        episode = json.optInt("episode"),
+        episodeTitle = json.nullableString("episodeTitle"),
+        batchId = json.nullableString("batch"),
+        batchSize = json.optInt("batchSize"),
+    )
 }
+
+internal fun encodeDownloadEntries(entries: List<DownloadEntry>): String =
+    JSONArray(entries.map(::downloadToJson)).toString()
+
+internal fun decodeDownloadEntries(raw: String?): List<DownloadEntry> = runCatching {
+    JSONArray(raw ?: "[]").objects().mapNotNull(::downloadFromJson)
+}.getOrDefault(emptyList())
+
+private fun seasonDownloadTaskToJson(task: SeasonDownloadTask) = JSONObject()
+    .put("id", task.id)
+    .put("batch", task.batchId)
+    .put("media", mediaToJson(task.media))
+    .put("season", task.season)
+    .put("episode", task.episode)
+    .put("episodeTitle", task.episodeTitle)
+    .put("resolution", task.preference.resolution)
+    .put("audio", task.preference.audio)
+    .put("batchSize", task.batchSize)
+    .put("created", task.createdAt)
+    .put("attempts", task.attempts)
+    .put("lastError", task.lastError)
+
+private fun seasonDownloadTaskFromJson(json: JSONObject): SeasonDownloadTask? {
+    val id = json.optString("id").takeIf(String::isNotBlank) ?: return null
+    val batchId = json.optString("batch").takeIf(String::isNotBlank) ?: return null
+    val media = json.optJSONObject("media")?.let(::mediaFromJson) ?: return null
+    val season = json.optInt("season").takeIf { it > 0 } ?: return null
+    val episode = json.optInt("episode").takeIf { it > 0 } ?: return null
+    return SeasonDownloadTask(
+        id = id,
+        batchId = batchId,
+        media = media,
+        season = season,
+        episode = episode,
+        episodeTitle = json.optString("episodeTitle", "Episode $episode"),
+        preference = DownloadPreference(
+            resolution = json.optInt("resolution"),
+            audio = json.nullableString("audio"),
+        ),
+        batchSize = json.optInt("batchSize").coerceAtLeast(1),
+        createdAt = json.optLong("created"),
+        attempts = json.optInt("attempts").coerceAtLeast(0),
+        lastError = json.nullableString("lastError"),
+    )
+}
+
+internal fun encodeSeasonDownloadTasks(tasks: List<SeasonDownloadTask>): String =
+    JSONArray(tasks.map(::seasonDownloadTaskToJson)).toString()
+
+internal fun decodeSeasonDownloadTasks(raw: String?): List<SeasonDownloadTask> = runCatching {
+    JSONArray(raw ?: "[]").objects().mapNotNull(::seasonDownloadTaskFromJson)
+}.getOrDefault(emptyList())
 
 private fun localMediaToJson(entry: LocalMediaEntry) = JSONObject()
     .put("id", entry.id)
@@ -362,6 +807,28 @@ private fun localMediaFromJson(json: JSONObject): LocalMediaEntry? {
         uri = uri,
         addedAt = json.optLong("added"),
     )
+}
+
+internal fun downloadStatusMessage(status: Int, reason: Int, wifiOnly: Boolean): String? = when (status) {
+    DownloadManager.STATUS_PENDING -> if (wifiOnly) "Waiting for Wi-Fi" else "Starting download"
+    DownloadManager.STATUS_PAUSED -> when (reason) {
+        DownloadManager.PAUSED_WAITING_TO_RETRY -> "Waiting to retry"
+        DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "Waiting for a network"
+        DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "Waiting for Wi-Fi"
+        else -> "Download paused"
+    }
+    DownloadManager.STATUS_FAILED -> when (reason) {
+        DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Not enough storage"
+        DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "File already exists"
+        DownloadManager.ERROR_CANNOT_RESUME -> "Download could not resume"
+        DownloadManager.ERROR_DEVICE_NOT_FOUND -> "Storage is unavailable"
+        DownloadManager.ERROR_UNHANDLED_HTTP_CODE,
+        DownloadManager.ERROR_HTTP_DATA_ERROR,
+        DownloadManager.ERROR_TOO_MANY_REDIRECTS,
+        -> "Download link failed"
+        else -> "Download failed"
+    }
+    else -> null
 }
 
 private fun JSONObject.nullableString(key: String): String? = opt(key)

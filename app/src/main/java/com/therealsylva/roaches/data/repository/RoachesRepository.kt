@@ -21,10 +21,12 @@ import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 class RoachesRepository(private val store: LocalStore) {
     private val settings = store.settings()
     private val api = MovieBoxApi(store.clientIdentity())
+    private val seasonsBySubject = ConcurrentHashMap<String, List<Season>>()
 
     fun cachedDiscover(): List<Shelf> = store.cachedHome(settings.contentRegion)
 
@@ -74,6 +76,8 @@ class RoachesRepository(private val store: LocalStore) {
             backdropUrl = parsed.backdropUrl ?: seed.backdropUrl ?: seed.posterUrl,
             year = parsed.year.ifBlank { seed.year },
         )
+        val seasons = parseSeasons(json.opt("seasons"))
+        if (seasons.isNotEmpty()) seasonsBySubject[item.id] = seasons
         return MediaDetails(
             item = item,
             synopsis = json.string("description", "intro", "synopsis", "overview")
@@ -83,8 +87,8 @@ class RoachesRepository(private val store: LocalStore) {
             director = json.string("director", "directors"),
             cast = json.string("stars", "actors", "cast"),
             country = json.string("countryName", "country"),
-            audioLanguage = preferred.language ?: json.string("lanName", "language", "audio"),
-            seasons = parseSeasons(json.opt("seasons")),
+            audioLanguage = resolveAudioLanguage(preferred.language, json, initial),
+            seasons = seasons,
         )
     }
 
@@ -94,31 +98,30 @@ class RoachesRepository(private val store: LocalStore) {
         episode: Int,
         languageHint: String? = null,
     ): List<StreamSource> {
-        val payload = api.resources(subjectId, season, episode)
-        val resources = when (payload) {
-            is JSONArray -> payload
-            is JSONObject -> payload.optJSONArray("list") ?: JSONArray()
-            else -> JSONArray()
-        }
-        val parsed = buildList {
-            repeat(resources.length()) { index ->
-                val source = resources.optJSONObject(index) ?: return@repeat
-                val url = source.string("resourceLink", "url", "link") ?: return@repeat
-                add(
-                    StreamSource(
-                        resourceId = source.string("resourceId", "id").orEmpty(),
-                        url = url,
-                        resolution = source.int("resolution", "quality"),
-                        codec = source.string("codec", "codecName", "encode", "format"),
-                        audio = source.string("audio", "language", "lanName")
-                            ?: detectLanguage(source.string("filename", "fileName", "name", "title"))
-                            ?: languageHint,
-                        sizeBytes = source.longOrNull("size", "fileSize", "sizeBytes"),
-                        filename = source.string("filename", "fileName", "name"),
-                    ),
-                )
+        val rows = if (season > 0 && episode > 0) {
+            val startPage = estimatedEpisodePage(
+                seasons = seasonsBySubject[subjectId].orEmpty(),
+                season = season,
+                episode = episode,
+            )
+            resolveEpisodeResourceRows(
+                season = season,
+                episode = episode,
+                startPage = startPage,
+                fetchScopedPage = { page ->
+                    parseResourcePage(api.episodeResourcePage(subjectId, season, episode, page))
+                },
+                fetchGenericPage = { resolution, page ->
+                    parseResourcePage(api.resourcePage(subjectId, resolution, page))
+                },
+            )
+        } else {
+            val initial = parseResourcePage(api.resourcePage(subjectId))
+            collectMovieResourceRows(initial) { page ->
+                parseResourcePage(api.resourcePage(subjectId, page = page))
             }
-        }.distinctBy { it.resourceId.ifBlank { it.url.substringBefore('?') } }
+        }
+        val parsed = parseStreamSources(rows, languageHint)
         val quality = settings.playbackQuality
         return if (quality == PlaybackQuality.Auto) {
             parsed.sortedWith(compareByDescending<StreamSource>(StreamSource::resolution).thenBy { it.sizeBytes })
@@ -143,6 +146,244 @@ class RoachesRepository(private val store: LocalStore) {
             }
         }.distinctBy(SubtitleTrack::url)
     }
+}
+
+internal data class ResourcePage(
+    val items: List<JSONObject>,
+    val hasMore: Boolean,
+    val resolutions: List<Int>,
+)
+
+private data class ResolutionRows(
+    val rows: List<JSONObject>,
+    val failure: Throwable? = null,
+)
+
+private const val MOVIE_RESOURCE_PAGE_LIMIT = 10
+private const val SERIES_RESOURCE_PAGE_LIMIT = 60
+private const val RESOURCE_PAGE_SIZE = 20
+private val DEFAULT_RESOURCE_RESOLUTIONS = listOf(1080, 720, 480, 360)
+
+internal fun parseResourcePage(payload: Any): ResourcePage {
+    val root = payload as? JSONObject
+    val list = when (payload) {
+        is JSONArray -> payload
+        is JSONObject -> payload.optJSONArray("list") ?: JSONArray()
+        else -> JSONArray()
+    }
+    val resolutions = buildList {
+        val values = root?.optJSONArray("collectionResolutions") ?: JSONArray()
+        repeat(values.length()) { index ->
+            val resolution = when (val value = values.opt(index)) {
+                is JSONObject -> value.int("resolution", "quality")
+                is Number -> value.toInt()
+                is String -> value.filter(Char::isDigit).toIntOrNull() ?: 0
+                else -> 0
+            }
+            if (resolution > 0) add(resolution)
+        }
+    }.distinct().sortedDescending()
+    return ResourcePage(
+        items = list.jsonObjects(),
+        hasMore = root?.optJSONObject("pager")?.booleanOrNull("hasMore")
+            ?: root?.booleanOrNull("hasMore")
+            ?: false,
+        resolutions = resolutions,
+    )
+}
+
+internal suspend fun collectMovieResourceRows(
+    initial: ResourcePage,
+    maxPages: Int = MOVIE_RESOURCE_PAGE_LIMIT,
+    fetchPage: suspend (page: Int) -> ResourcePage,
+): List<JSONObject> {
+    val rows = initial.items.toMutableList()
+    var current = initial
+    var page = 1
+    var failure: Throwable? = null
+    while (current.hasMore && page < maxPages.coerceAtLeast(1)) {
+        page += 1
+        current = try {
+            fetchPage(page)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (caught: Throwable) {
+            failure = caught
+            break
+        }
+        rows += current.items
+    }
+    failure?.let { if (rows.isEmpty()) throw it }
+    return distinctResourceRows(rows)
+}
+
+internal suspend fun resolveEpisodeResourceRows(
+    season: Int,
+    episode: Int,
+    startPage: Int,
+    defaultResolutions: List<Int> = DEFAULT_RESOURCE_RESOLUTIONS,
+    fetchScopedPage: suspend (page: Int) -> ResourcePage,
+    fetchGenericPage: suspend (resolution: Int, page: Int) -> ResourcePage,
+): List<JSONObject> {
+    val scopedRows = try {
+        val initial = fetchScopedPage(1)
+        collectMovieResourceRows(initial) { page -> fetchScopedPage(page) }
+            .filter { row ->
+                row.isValidScopedEpisodeRow(season, episode) &&
+                    row.string("resourceLink", "url", "link") != null
+            }
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (_: Throwable) {
+        emptyList()
+    }
+    if (scopedRows.isNotEmpty()) return scopedRows
+
+    val initial = fetchGenericPage(0, 1)
+    return collectEpisodeResourceRows(
+        initial = initial,
+        season = season,
+        episode = episode,
+        startPage = startPage,
+        resolutions = initial.resolutions.ifEmpty { defaultResolutions },
+        fetchPage = fetchGenericPage,
+    )
+}
+
+internal suspend fun collectEpisodeResourceRows(
+    initial: ResourcePage,
+    season: Int,
+    episode: Int,
+    startPage: Int,
+    resolutions: List<Int>,
+    maxPage: Int = SERIES_RESOURCE_PAGE_LIMIT,
+    fetchPage: suspend (resolution: Int, page: Int) -> ResourcePage,
+): List<JSONObject> {
+    val rows = initial.items.filter { it.matchesEpisode(season, episode) }.toMutableList()
+    var firstFailure: Throwable? = null
+    for (batch in resolutions.filter { it > 0 }.distinct().chunked(2)) {
+        val results = coroutineScope {
+            batch.map { resolution ->
+                async {
+                    try {
+                        ResolutionRows(
+                            collectResolutionRows(
+                                resolution = resolution,
+                                season = season,
+                                episode = episode,
+                                startPage = startPage,
+                                maxPage = maxPage,
+                                fetchPage = fetchPage,
+                            ),
+                        )
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (failure: Throwable) {
+                        ResolutionRows(emptyList(), failure)
+                    }
+                }
+            }.awaitAll()
+        }
+        results.forEach { result ->
+            rows += result.rows
+            if (firstFailure == null) firstFailure = result.failure
+        }
+    }
+    firstFailure?.let { if (rows.isEmpty()) throw it }
+    return distinctResourceRows(rows)
+}
+
+private suspend fun collectResolutionRows(
+    resolution: Int,
+    season: Int,
+    episode: Int,
+    startPage: Int,
+    maxPage: Int,
+    fetchPage: suspend (resolution: Int, page: Int) -> ResourcePage,
+): List<JSONObject> {
+    var page = startPage.coerceAtLeast(1)
+    while (page <= maxPage.coerceAtLeast(1)) {
+        val current = fetchPage(resolution, page)
+        val matches = current.items.filter { it.matchesEpisode(season, episode) }
+        if (matches.isNotEmpty()) return matches
+        if (current.items.isEmpty() || !current.hasMore) return emptyList()
+        page += 1
+    }
+    return emptyList()
+}
+
+internal fun estimatedEpisodePage(
+    seasons: List<Season>,
+    season: Int,
+    episode: Int,
+    pageSize: Int = RESOURCE_PAGE_SIZE,
+): Int {
+    val earlierEpisodes = seasons
+        .filter { it.number < season }
+        .sumOf { it.episodes.size }
+    val absoluteEpisode = earlierEpisodes + episode.coerceAtLeast(1) - 1
+    return absoluteEpisode / pageSize.coerceAtLeast(1) + 1
+}
+
+internal fun parseStreamSources(
+    resources: List<JSONObject>,
+    languageHint: String? = null,
+): List<StreamSource> = buildList {
+    resources.forEach { source ->
+        val url = source.string("resourceLink", "url", "link") ?: return@forEach
+        val filename = source.string("filename", "fileName", "name", "title")
+        val audio = normalizeAudioLabel(source.string("audio", "language", "lanName", "audioName"))
+            ?: detectLanguage(filename)
+            ?: normalizeAudioLabel(languageHint)
+        add(
+            StreamSource(
+                resourceId = source.string("resourceId", "id").orEmpty(),
+                url = url,
+                resolution = source.int("resolution", "quality"),
+                codec = source.string("codec", "codecName", "encode", "format"),
+                audio = audio,
+                sizeBytes = source.longOrNull("size", "fileSize", "sizeBytes"),
+                filename = filename,
+                durationSeconds = source.durationSeconds("duration", "runtime", "length"),
+                uploader = source.string("uploadBy", "uploader", "uploadedBy", "sourceName"),
+            ),
+        )
+    }
+}.distinctBy { it.resourceId.ifBlank { it.url.substringBefore('?') } }
+
+internal fun resolveAudioLanguage(
+    preferredLabel: String?,
+    selectedDetails: JSONObject,
+    initialDetails: JSONObject,
+): String? {
+    val preferred = normalizeAudioLabel(preferredLabel)
+    val reported = listOf(
+        selectedDetails.string("language", "originalLanguage", "audio", "audioName", "lanName"),
+        initialDetails.string("language", "originalLanguage", "audio", "audioName", "lanName"),
+    ).mapNotNull(::normalizeAudioLabel)
+    return if (preferred.isGenericAudioLabel()) {
+        reported.firstOrNull { it.isConcreteAudioLabel() } ?: preferred
+    } else {
+        preferred ?: reported.firstOrNull()
+    }
+}
+
+private fun distinctResourceRows(rows: List<JSONObject>): List<JSONObject> = buildMap {
+    rows.forEachIndexed { index, row ->
+        val resourceId = row.string("resourceId", "id")
+        val link = row.string("resourceLink", "url", "link")?.substringBefore('?')
+        put(resourceId ?: link ?: "row-$index", row)
+    }
+}.values.toList()
+
+private fun JSONObject.matchesEpisode(season: Int, episode: Int): Boolean =
+    int("se", "season", "seasonNumber") == season &&
+        int("ep", "episode", "episodeNumber") == episode
+
+private fun JSONObject.isValidScopedEpisodeRow(season: Int, episode: Int): Boolean {
+    val hasSeason = has("se") || has("season") || has("seasonNumber")
+    val hasEpisode = has("ep") || has("episode") || has("episodeNumber")
+    return if (hasSeason || hasEpisode) matchesEpisode(season, episode) else true
 }
 
 private data class RankedMedia(val item: MediaItem, val penalty: Int, val index: Int)
@@ -368,7 +609,7 @@ private fun JSONObject.preferredSubject(preference: PreferredAudio, fallback: St
         repeat(dubs.length()) { index ->
             val dub = dubs.optJSONObject(index) ?: return@repeat
             val id = dub.string("subjectId", "id") ?: return@repeat
-            val language = dub.string("lanName", "language", "name").orEmpty()
+            val language = dub.string("lanName", "language", "audioName", "name", "title").orEmpty()
             add(Triple(index, id, language))
         }
     }
@@ -488,10 +729,40 @@ private fun JSONObject.int(vararg keys: String): Int = keys.firstNotNullOfOrNull
 private fun JSONObject.longOrNull(vararg keys: String): Long? = keys.firstNotNullOfOrNull { key ->
     when (val value = opt(key)) {
         is Number -> value.toLong()
-        is String -> value.filter(Char::isDigit).toLongOrNull()
+        is String -> value.trim().toDoubleOrNull()?.toLong()
         else -> null
     }
 }?.takeIf { it > 0L }
+
+private fun JSONObject.durationSeconds(vararg keys: String): Long? = keys.firstNotNullOfOrNull { key ->
+    when (val value = opt(key)) {
+        is Number -> value.toLong()
+        is String -> value.trim().toLongOrNull() ?: value.parseClockDuration()
+        else -> null
+    }
+}?.takeIf { it > 0L }
+
+private fun String.parseClockDuration(): Long? {
+    val rawParts = split(':')
+    if (rawParts.size !in 2..3) return null
+    val parts = rawParts.map { it.toLongOrNull() ?: return null }
+    return parts.fold(0L) { total, part -> total * 60L + part }
+}
+
+private fun JSONObject.booleanOrNull(key: String): Boolean? = when (val value = opt(key)) {
+    is Boolean -> value
+    is Number -> value.toInt() != 0
+    is String -> when (value.trim().lowercase(Locale.US)) {
+        "true", "1" -> true
+        "false", "0" -> false
+        else -> null
+    }
+    else -> null
+}
+
+private fun JSONArray.jsonObjects(): List<JSONObject> = buildList {
+    repeat(length()) { index -> optJSONObject(index)?.let(::add) }
+}
 
 private fun JSONObject.stringList(vararg keys: String): List<String> = keys.firstNotNullOfOrNull { key ->
     when (val value = opt(key)) {
@@ -529,10 +800,55 @@ private fun detectLanguage(value: String?): String? {
         "multi audio" in text || "multi-audio" in text -> "Multi audio"
         "dual audio" in text || "dual-audio" in text -> "Dual audio"
         Regex("\\b(english|eng)\\b").containsMatchIn(text) -> "English"
-        Regex("\\b(french|fra)\\b").containsMatchIn(text) -> "French"
+        Regex("\\b(french|fra|fre)\\b").containsMatchIn(text) -> "French"
         Regex("\\b(spanish|spa)\\b").containsMatchIn(text) -> "Spanish"
         Regex("\\b(arabic|ara)\\b").containsMatchIn(text) -> "Arabic"
         Regex("\\b(hindi|hin)\\b").containsMatchIn(text) -> "Hindi"
+        Regex("\\b(japanese|jpn)\\b").containsMatchIn(text) -> "Japanese"
+        Regex("\\b(korean|kor)\\b").containsMatchIn(text) -> "Korean"
+        Regex("\\b(chinese|mandarin|cantonese|zho|chi)\\b").containsMatchIn(text) -> "Chinese"
+        Regex("\\b(portuguese|por)\\b").containsMatchIn(text) -> "Portuguese"
+        Regex("\\b(german|deu|ger)\\b").containsMatchIn(text) -> "German"
+        Regex("\\b(italian|ita)\\b").containsMatchIn(text) -> "Italian"
+        Regex("\\b(turkish|tur)\\b").containsMatchIn(text) -> "Turkish"
+        Regex("\\b(russian|rus)\\b").containsMatchIn(text) -> "Russian"
         else -> null
     }
+}
+
+private fun normalizeAudioLabel(value: String?): String? {
+    val label = value?.trim()?.takeIf(String::isNotBlank) ?: return null
+    val lowered = label.lowercase(Locale.US)
+    if (lowered in setOf("unknown", "none", "null", "n/a", "--")) return null
+    if ("multi audio" in lowered || "multi-audio" in lowered) return "Multi audio"
+    if ("dual audio" in lowered || "dual-audio" in lowered) return "Dual audio"
+    if (lowered.startsWith("original")) return detectLanguage(label) ?: "Original audio"
+    return when (lowered) {
+        "en", "eng", "english" -> "English"
+        "fr", "fre", "fra", "french" -> "French"
+        "es", "spa", "spanish" -> "Spanish"
+        "ar", "ara", "arabic" -> "Arabic"
+        "hi", "hin", "hindi" -> "Hindi"
+        "ja", "jpn", "japanese" -> "Japanese"
+        "ko", "kor", "korean" -> "Korean"
+        "zh", "zho", "chi", "chinese", "mandarin", "cantonese" -> "Chinese"
+        "pt", "por", "portuguese" -> "Portuguese"
+        "de", "deu", "ger", "german" -> "German"
+        "it", "ita", "italian" -> "Italian"
+        "tr", "tur", "turkish" -> "Turkish"
+        "ru", "rus", "russian" -> "Russian"
+        else -> label
+    }
+}
+
+private fun String?.isGenericAudioLabel(): Boolean {
+    val value = this?.lowercase(Locale.US) ?: return false
+    return "original" in value || "multi audio" in value || "dual audio" in value
+}
+
+private fun String.isConcreteAudioLabel(): Boolean {
+    val value = lowercase(Locale.US)
+    return !isGenericAudioLabel() &&
+        value !in setOf("unknown", "none", "null", "n/a", "--") &&
+        none { it == ',' || it == '/' || it == '|' }
 }
