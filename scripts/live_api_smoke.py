@@ -16,12 +16,13 @@ import uuid
 
 
 HOSTS = (
-    "https://api.aoneroom.com",
-    "https://api3.aoneroom.com",
     "https://api6.aoneroom.com",
+    "https://api5.aoneroom.com",
     "https://api4.aoneroom.com",
     "https://api4sg.aoneroom.com",
-    "https://api5.aoneroom.com",
+    "https://api3.aoneroom.com",
+    "https://api6sg.aoneroom.com",
+    "https://api.inmoviebox.com",
 )
 SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
 IDENTITY = str(uuid.uuid4())
