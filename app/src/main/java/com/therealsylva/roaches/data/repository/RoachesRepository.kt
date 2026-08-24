@@ -50,7 +50,7 @@ class RoachesRepository(private val store: LocalStore) {
 
     suspend fun search(query: String, page: Int = 1): List<MediaItem> {
         val payload = api.search(query, page)
-        return parseSearchResults(payload, query)
+        return parseSearchResults(payload, query, settings.preferredAudio, settings.contentRegion)
     }
 
     suspend fun category(category: BrowseCategory, page: Int = 1): List<MediaItem> {
@@ -122,16 +122,7 @@ class RoachesRepository(private val store: LocalStore) {
             }
         }
         val parsed = parseStreamSources(rows, languageHint)
-        val quality = settings.playbackQuality
-        return if (quality == PlaybackQuality.Auto) {
-            parsed.sortedWith(compareByDescending<StreamSource>(StreamSource::resolution).thenBy { it.sizeBytes })
-        } else {
-            parsed.sortedWith(
-                compareBy<StreamSource> { source ->
-                    if (source.resolution in 1..quality.height) 0 else 1
-                }.thenByDescending(StreamSource::resolution),
-            )
-        }
+        return orderStreamSources(parsed, settings.playbackQuality, settings.preferredAudio)
     }
 
     suspend fun captions(subjectId: String, source: StreamSource): List<SubtitleTrack> {
@@ -514,21 +505,31 @@ private fun JSONArray.catalogueItems(region: ContentRegion): List<MediaItem> = b
     }
     .map(RankedMedia::item)
 
-internal fun parseSearchResults(payload: Any, query: String): List<MediaItem> {
+internal fun parseSearchResults(
+    payload: Any,
+    query: String,
+    preferredAudio: PreferredAudio = PreferredAudio.English,
+    region: ContentRegion = ContentRegion.GlobalEnglish,
+): List<MediaItem> {
     val subjects = primarySearchObjects(payload)
     return subjects.mapIndexedNotNull { index, value ->
-        if (!value.isCatalogueTitle()) return@mapIndexedNotNull null
-        value.toMediaItem()?.let { item -> RankedMedia(item, value.variantPenalty(), index) }
+        if (!value.isCatalogueTitle() || !value.isAllowedInSearch(preferredAudio, region)) {
+            return@mapIndexedNotNull null
+        }
+        value.toMediaItem()?.let { item ->
+            RankedMedia(item, value.variantPenalty(preferredAudio), index)
+        }
     }.sortedWith(compareBy<RankedMedia>(RankedMedia::penalty).thenBy(RankedMedia::index))
         .distinctBy { ranked ->
             with(ranked.item) { "${title.lowercase(Locale.US)}-$year-$kind" }
         }
-        .map(RankedMedia::item)
         .sortedWith(
-            compareByDescending<MediaItem> { it.title.equals(query, ignoreCase = true) }
-                .thenByDescending { it.title.startsWith(query, ignoreCase = true) }
-                .thenByDescending(MediaItem::year),
+            compareByDescending<RankedMedia> { it.item.title.equals(query, ignoreCase = true) }
+                .thenByDescending { it.item.title.startsWith(query, ignoreCase = true) }
+                .thenBy(RankedMedia::penalty)
+                .thenByDescending { it.item.year },
         )
+        .map(RankedMedia::item)
 }
 
 private fun primarySearchObjects(payload: Any): List<JSONObject> {
@@ -550,18 +551,22 @@ private fun primarySearchObjects(payload: Any): List<JSONObject> {
 
 private fun JSONObject.primarySubjectGroup(key: String): JSONArray? {
     val groups = optJSONArray(key) ?: return null
+    var fallback: JSONArray? = null
     repeat(groups.length()) { index ->
         val group = groups.optJSONObject(index) ?: return@repeat
         val subjects = group.optJSONArray("subjects") ?: return@repeat
         val topicType = group.string("topicType").orEmpty()
-        val moreTabId = group.string("moreTabId").orEmpty()
-        if (subjects.length() > 0 && moreTabId.isBlank() &&
+        if (subjects.length() > 0 &&
             (topicType.isBlank() || topicType.equals("SUBJECT", ignoreCase = true))
         ) {
-            return subjects
+            if (fallback == null) fallback = subjects
+            val moreTabId = group.string("moreTabId").orEmpty()
+            if (moreTabId.isBlank() || moreTabId.equals("MovieTV", ignoreCase = true)) {
+                return subjects
+            }
         }
     }
-    return null
+    return fallback
 }
 
 private fun JSONObject.isCatalogueTitle(): Boolean {
@@ -589,13 +594,34 @@ private fun JSONObject.cataloguePenalty(region: ContentRegion): Int = listOfNotN
     string("countryName", "country", "area"),
 ).joinToString(" ").regionalPenalty(region)
 
-private fun JSONObject.variantPenalty(): Int {
+private fun JSONObject.isAllowedInSearch(
+    preference: PreferredAudio,
+    region: ContentRegion,
+): Boolean {
+    if (preference == PreferredAudio.Any || preference == PreferredAudio.Hindi) return true
+    val title = string("title", "name").orEmpty()
+    val language = string("language", "lanName", "audio", "originalLanguage").orEmpty()
+    val country = string("countryName", "country", "area").orEmpty()
+    val combined = "$title $language"
+    val indianTitleTag = INDIAN_AUDIO_MARKER.containsMatchIn(title)
+    val explicitlyPreferred = matchesAudioPreference(combined, preference)
+    val originalAvailable = ORIGINAL_OR_ENGLISH_MARKER.containsMatchIn(language)
+    val indianDub = INDIAN_AUDIO_MARKER.containsMatchIn(combined)
+    val blockedRegion = region == ContentRegion.GlobalEnglish &&
+        (INDIA_MARKER.containsMatchIn(country) || INDIA_CONTENT_MARKER.containsMatchIn(title))
+    return !blockedRegion && !indianTitleTag &&
+        (!indianDub || explicitlyPreferred || originalAvailable)
+}
+
+private fun JSONObject.variantPenalty(preference: PreferredAudio): Int {
     val label = string("language", "lanName", "audio", "originalLanguage").orEmpty()
     val title = string("title", "name").orEmpty()
+    val combined = "$title $label"
     return when {
         INDIA_MARKER.containsMatchIn(title) -> 3
+        matchesAudioPreference(combined, preference) -> 0
         label.contains("original", ignoreCase = true) -> 0
-        label.contains("english", ignoreCase = true) || title.contains("[english]", ignoreCase = true) -> 1
+        matchesAudioPreference(combined, PreferredAudio.English) -> 1
         INDIA_MARKER.containsMatchIn(label) -> 3
         else -> 1
     }
@@ -619,9 +645,9 @@ private fun JSONObject.preferredSubject(preference: PreferredAudio, fallback: St
             val language = variant.third
             when {
                 preference == PreferredAudio.Any -> 0
-                preference.matches.any { language.contains(it, ignoreCase = true) } -> 0
+                matchesAudioPreference(language, preference) -> 0
                 language.contains("original", ignoreCase = true) -> 1
-                language.contains("english", ignoreCase = true) -> 2
+                matchesAudioPreference(language, PreferredAudio.English) -> 2
                 else -> 3
             }
         }.thenBy { it.first },
@@ -643,12 +669,50 @@ private fun String.regionalPenalty(region: ContentRegion): Int = when (region) {
     }
 }
 
+internal fun matchesAudioPreference(label: String?, preference: PreferredAudio): Boolean {
+    if (preference == PreferredAudio.Any) return true
+    val tokens = label.orEmpty()
+        .lowercase(Locale.US)
+        .split(Regex("[^a-z0-9]+"))
+        .filter(String::isNotBlank)
+        .toSet()
+    return preference.matches.any { match -> match.lowercase(Locale.US) in tokens }
+}
+
+internal fun orderStreamSources(
+    sources: List<StreamSource>,
+    quality: PlaybackQuality,
+    preference: PreferredAudio,
+): List<StreamSource> = if (quality == PlaybackQuality.Auto) {
+    sources.sortedWith(
+        compareBy<StreamSource> { source -> sourceAudioPenalty(source.audio, preference) }
+            .thenByDescending(StreamSource::resolution)
+            .thenBy { it.sizeBytes },
+    )
+} else {
+    sources.sortedWith(
+        compareBy<StreamSource> { source -> sourceAudioPenalty(source.audio, preference) }
+            .thenBy { source -> if (source.resolution in 1..quality.height) 0 else 1 }
+            .thenByDescending(StreamSource::resolution),
+    )
+}
+
+private fun sourceAudioPenalty(label: String?, preference: PreferredAudio): Int = when {
+    preference == PreferredAudio.Any -> 0
+    matchesAudioPreference(label, preference) -> 0
+    label.isGenericAudioLabel() -> 1
+    label.isNullOrBlank() -> 2
+    matchesAudioPreference(label, PreferredAudio.English) -> 2
+    INDIAN_AUDIO_MARKER.containsMatchIn(label) -> 4
+    else -> 3
+}
+
 private val INDIA_MARKER = Regex(
-    "(?i)\\b(india|bollywood|hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi)\\b",
+    "(?i)\\b(india|bollywood|hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|bangla|marathi)\\b",
 )
 private val INDIA_CONTENT_MARKER = Regex("(?i)\\b(india|bollywood)\\b")
 private val INDIAN_AUDIO_MARKER = Regex(
-    "(?i)\\b(hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi)\\b",
+    "(?i)\\b(hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|bangla|marathi)\\b",
 )
 private val ORIGINAL_OR_ENGLISH_MARKER = Regex("(?i)\\b(original|english|eng)\\b")
 private val ADULT_MARKER = Regex("(?i)\\badult\\b")
@@ -788,7 +852,7 @@ private fun cleanTitle(raw: String): String {
     }
     title = title.substringBefore("[").trim()
     val suffix = title.substringAfterLast(" - ", "")
-    if (suffix.contains(Regex("(?i)hindi|tamil|telugu|english|dub|audio|multi"))) {
+    if (suffix.contains(Regex("(?i)hindi|tamil|telugu|bengali|bangla|english|dub|audio|multi"))) {
         title = title.substringBeforeLast(" - ").trim()
     }
     return title.trimEnd('-', ':', '_', '.', ' ').ifBlank { raw.trim() }
@@ -804,6 +868,7 @@ private fun detectLanguage(value: String?): String? {
         Regex("\\b(spanish|spa)\\b").containsMatchIn(text) -> "Spanish"
         Regex("\\b(arabic|ara)\\b").containsMatchIn(text) -> "Arabic"
         Regex("\\b(hindi|hin)\\b").containsMatchIn(text) -> "Hindi"
+        Regex("\\b(bengali|bangla|ben|bn)\\b").containsMatchIn(text) -> "Bengali"
         Regex("\\b(japanese|jpn)\\b").containsMatchIn(text) -> "Japanese"
         Regex("\\b(korean|kor)\\b").containsMatchIn(text) -> "Korean"
         Regex("\\b(chinese|mandarin|cantonese|zho|chi)\\b").containsMatchIn(text) -> "Chinese"
@@ -829,6 +894,7 @@ private fun normalizeAudioLabel(value: String?): String? {
         "es", "spa", "spanish" -> "Spanish"
         "ar", "ara", "arabic" -> "Arabic"
         "hi", "hin", "hindi" -> "Hindi"
+        "bn", "ben", "bengali", "bangla" -> "Bengali"
         "ja", "jpn", "japanese" -> "Japanese"
         "ko", "kor", "korean" -> "Korean"
         "zh", "zho", "chi", "chinese", "mandarin", "cantonese" -> "Chinese"

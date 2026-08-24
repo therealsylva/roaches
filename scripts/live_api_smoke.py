@@ -119,6 +119,26 @@ def request(method: str, path: str, payload: dict | None = None, token: str | No
     raise RuntimeError("all provider hosts failed") from last_error
 
 
+def primary_subjects(search: dict) -> list[dict]:
+    groups = [
+        group
+        for group in search.get("results", [])
+        if group.get("topicType", "SUBJECT").upper() == "SUBJECT"
+        and group.get("subjects")
+    ]
+    primary = next(
+        (
+            group
+            for group in groups
+            if not group.get("moreTabId") or group.get("moreTabId", "").lower() == "movietv"
+        ),
+        groups[0] if groups else None,
+    )
+    if primary is None:
+        raise RuntimeError("live search returned no primary title group")
+    return primary["subjects"]
+
+
 def main() -> int:
     rails = (
         ("Popular", "All", "Hottest"),
@@ -180,25 +200,23 @@ def main() -> int:
 
     if not token:
         _, token = request("GET", "/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version=")
+    toy_search, token = request(
+        "POST",
+        "/wefeed-mobile-bff/subject-api/search/v2",
+        {"keyword": "toy", "page": 1, "perPage": 20, "subjectType": "All", "tabId": "All"},
+        token,
+    )
+    toy_subjects = primary_subjects(toy_search)
+    if not any(item.get("title", "").lower().startswith("toy story") for item in toy_subjects):
+        raise RuntimeError("short-query search returned no Toy Story title")
+
     search, token = request(
         "POST",
         "/wefeed-mobile-bff/subject-api/search/v2",
         {"keyword": "Dune", "page": 1, "perPage": 20, "subjectType": "All", "tabId": "All"},
         token,
     )
-    primary = next(
-        (
-            group
-            for group in search.get("results", [])
-            if group.get("topicType", "SUBJECT").upper() == "SUBJECT"
-            and not group.get("moreTabId")
-            and group.get("subjects")
-        ),
-        None,
-    )
-    if primary is None:
-        raise RuntimeError("live search returned no primary title group")
-    subjects = primary["subjects"]
+    subjects = primary_subjects(search)
     dune = next(
         (
             item

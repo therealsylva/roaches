@@ -4,7 +4,10 @@ import com.google.common.truth.Truth.assertThat
 import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
+import com.therealsylva.roaches.data.model.PlaybackQuality
+import com.therealsylva.roaches.data.model.PreferredAudio
 import com.therealsylva.roaches.data.model.Shelf
+import com.therealsylva.roaches.data.model.StreamSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -88,6 +91,137 @@ class RoachesRepositoryTest {
         val results = parseSearchResults(payload, "Dune")
 
         assertThat(results.map { it.id }).containsExactly("one")
+    }
+
+    @Test
+    fun searchParserAcceptsProviderMovieGroupWithMoreTabId() {
+        val payload = JSONObject(
+            """
+            {
+              "results": [
+                {
+                  "topicType": "SUBJECT",
+                  "moreTabId": "Sports",
+                  "subjects": [
+                    {
+                      "subjectId": "sports",
+                      "title": "Toy Story match highlights",
+                      "language": "English",
+                      "subjectType": 1,
+                      "releaseDate": "2026-08-24"
+                    }
+                  ]
+                },
+                {
+                  "topicType": "SUBJECT",
+                  "moreTabId": "MovieTV",
+                  "subjects": [
+                    {
+                      "subjectId": "toy-story-5",
+                      "title": "Toy Story 5",
+                      "language": "English",
+                      "subjectType": 1,
+                      "releaseDate": "2026-06-19"
+                    },
+                    {
+                      "subjectId": "toy-story",
+                      "title": "Toy Story",
+                      "language": "English",
+                      "subjectType": 1,
+                      "releaseDate": "1995-11-22"
+                    }
+                  ]
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val results = parseSearchResults(payload, "toy")
+
+        assertThat(results.map { it.id }).containsExactly("toy-story-5", "toy-story").inOrder()
+    }
+
+    @Test
+    fun englishSearchRemovesBengaliDubAndKeepsEnglishTitle() {
+        val payload = JSONObject(
+            """
+            {
+              "results": [
+                {
+                  "topicType": "SUBJECT",
+                  "moreTabId": "MovieTV",
+                  "subjects": [
+                    {
+                      "subjectId": "bengali",
+                      "title": "Toy Story 5 - Bengali Dub",
+                      "language": "English, Bengali",
+                      "countryName": "United States",
+                      "subjectType": 1,
+                      "releaseDate": "2026-06-19"
+                    },
+                    {
+                      "subjectId": "bangla",
+                      "title": "Toy Story 5 - Bangla Dub",
+                      "language": "English, Bangla",
+                      "countryName": "United States",
+                      "subjectType": 1,
+                      "releaseDate": "2026-06-19"
+                    },
+                    {
+                      "subjectId": "english",
+                      "title": "Toy Story 5",
+                      "language": "English",
+                      "countryName": "United States",
+                      "subjectType": 1,
+                      "releaseDate": "2026-06-19"
+                    }
+                  ]
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val results = parseSearchResults(
+            payload,
+            "Toy Story",
+            PreferredAudio.English,
+            ContentRegion.GlobalEnglish,
+        )
+
+        assertThat(results.map { it.id }).containsExactly("english")
+    }
+
+    @Test
+    fun englishAudioAliasDoesNotMatchBengali() {
+        assertThat(matchesAudioPreference("English / ENG", PreferredAudio.English)).isTrue()
+        assertThat(matchesAudioPreference("Bengali", PreferredAudio.English)).isFalse()
+    }
+
+    @Test
+    fun streamOrderingPrefersEnglishBeforeQualityAndKeepsTruthfulFallbackOrder() {
+        val sources = listOf(
+            StreamSource("bengali-1080", "https://media/bn", 1080, audio = "Bengali"),
+            StreamSource("english-720", "https://media/en-720", 720, audio = "English"),
+            StreamSource("blank-1080", "https://media/unknown", 1080),
+            StreamSource("original-480", "https://media/original", 480, audio = "Original audio"),
+            StreamSource("english-1080", "https://media/en-1080", 1080, audio = "ENG"),
+        )
+
+        val automatic = orderStreamSources(sources, PlaybackQuality.Auto, PreferredAudio.English)
+        val capped = orderStreamSources(sources, PlaybackQuality.Hd, PreferredAudio.English)
+
+        assertThat(automatic.map { it.resourceId }).containsExactly(
+            "english-1080",
+            "english-720",
+            "original-480",
+            "blank-1080",
+            "bengali-1080",
+        ).inOrder()
+        assertThat(capped.take(2).map { it.resourceId })
+            .containsExactly("english-720", "english-1080")
+            .inOrder()
     }
 
     @Test
