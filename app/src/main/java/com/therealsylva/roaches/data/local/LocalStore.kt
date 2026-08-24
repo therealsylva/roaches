@@ -22,7 +22,7 @@ import java.util.UUID
 
 class LocalStore(context: Context) {
     companion object {
-        private const val PROVIDER_IP_PREFIX = "103.241"
+        private const val PROVIDER_FORWARDED_IP = "103.241.80.40"
     }
 
     private val appContext = context.applicationContext
@@ -31,12 +31,10 @@ class LocalStore(context: Context) {
     internal fun clientIdentity(): ClientIdentity {
         val installId = valueOrCreate("install_id") { UUID.randomUUID().toString() }
         val sessionId = valueOrCreate("session_id") { UUID.randomUUID().toString() }
-        val hash = installId.hashCode().toUInt().toLong()
-        val forwardedIp = "$PROVIDER_IP_PREFIX.${(hash shr 8) % 253 + 1}.${hash % 253 + 1}"
         return ClientIdentity(
             installId = installId,
             sessionId = sessionId,
-            forwardedIp = forwardedIp,
+            forwardedIp = PROVIDER_FORWARDED_IP,
         )
     }
 

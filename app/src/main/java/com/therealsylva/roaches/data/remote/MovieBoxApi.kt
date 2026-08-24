@@ -64,6 +64,25 @@ internal class MovieBoxApi(
         return request("POST", "/wefeed-mobile-bff/subject-api/search/v2", body)
     }
 
+    suspend fun catalogue(
+        genre: String,
+        country: String,
+        page: Int = 1,
+        sort: String = "Hottest",
+    ): Any {
+        val body = JSONObject()
+            .put("tabId", 2)
+            .put("page", page)
+            .put("perPage", 20)
+            .put("classify", "All")
+            .put("country", country)
+            .put("genre", genre)
+            .put("sort", sort)
+            .put("year", "All")
+            .toString()
+        return request("POST", "/wefeed-mobile-bff/subject-api/list", body)
+    }
+
     suspend fun details(subjectId: String): JSONObject {
         val encoded = encode(subjectId)
         val payload = request("GET", "/wefeed-mobile-bff/subject-api/get?subjectId=$encoded")
@@ -141,7 +160,7 @@ internal class MovieBoxApi(
                     lastFailure = failure
                 }
             }
-            throw IOException("Home is temporarily unreachable", lastFailure)
+            throw IOException("Provider is temporarily unreachable", lastFailure)
         }
 
     private fun absorbToken(rawHeader: String?) {
