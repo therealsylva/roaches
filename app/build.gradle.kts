@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseStoreFile = providers.gradleProperty("ROACHES_STORE_FILE")
+val releaseStorePassword = providers.gradleProperty("ROACHES_STORE_PASSWORD")
+val releaseKeyAlias = providers.gradleProperty("ROACHES_KEY_ALIAS")
+val releaseKeyPassword = providers.gradleProperty("ROACHES_KEY_PASSWORD")
+val releaseSigningReady = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it.isPresent }
+
 android {
     namespace = "com.therealsylva.roaches"
     compileSdk = 35
@@ -20,8 +31,20 @@ android {
 
     base.archivesName = "roaches"
 
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

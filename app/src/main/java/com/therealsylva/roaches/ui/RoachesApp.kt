@@ -1,5 +1,6 @@
 package com.therealsylva.roaches.ui
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,9 +34,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.view.WindowCompat
 import com.therealsylva.roaches.ui.screens.DetailsScreen
 import com.therealsylva.roaches.ui.screens.CategoryScreen
 import com.therealsylva.roaches.ui.screens.DiscoverScreen
@@ -55,6 +59,14 @@ fun RoachesApp(
     isInPictureInPicture: () -> Boolean,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val view = LocalView.current
+    SideEffect {
+        (view.context as? Activity)?.window?.let { window ->
+            val darkBars = state.settings.darkTheme || state.screen == AppScreen.Player
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkBars
+            WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !darkBars
+        }
+    }
 
     RoachesTheme(darkTheme = state.settings.darkTheme) {
 

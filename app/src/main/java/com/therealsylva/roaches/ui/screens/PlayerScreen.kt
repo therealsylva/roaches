@@ -569,6 +569,7 @@ private fun formatSpeed(speed: Float): String = if (speed % 1f == 0f) {
     speed.toString().trimEnd('0').trimEnd('.')
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun resizeLabel(resizeMode: Int): String = when (resizeMode) {
     AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Crop"
     AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretch"
