@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  workflow_run:
+    workflows:
+      - "Roaches Android"
+    branches:
+      - main
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       version:
@@ -17,6 +24,7 @@ permissions:
 jobs:
   release:
     name: Sign and publish APK
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -24,32 +32,55 @@ jobs:
       ROACHES_STORE_PASSWORD: ${{ secrets.ROACHES_STORE_PASSWORD }}
       ROACHES_KEY_ALIAS: ${{ secrets.ROACHES_KEY_ALIAS }}
       ROACHES_KEY_PASSWORD: ${{ secrets.ROACHES_KEY_PASSWORD }}
-      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Verify release version
+      - name: Resolve release version
         run: |
-          VERSION="${RELEASE_VERSION#v}"
+          REQUESTED_VERSION="${{ inputs.version }}"
+          if [ -z "$REQUESTED_VERSION" ] && [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            REQUESTED_VERSION="$GITHUB_REF_NAME"
+          fi
           APP_VERSION="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)"
           test -n "$APP_VERSION"
-          test "$VERSION" = "$APP_VERSION"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            test "${REQUESTED_VERSION#v}" = "$APP_VERSION"
+          fi
+          echo "RELEASE_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+
+      - name: Check existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-java@v4
+        if: steps.existing.outputs.exists != 'true'
         with:
           distribution: temurin
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        if: steps.existing.outputs.exists != 'true'
 
       - uses: gradle/actions/setup-gradle@v4
+        if: steps.existing.outputs.exists != 'true'
         with:
           gradle-version: "8.11.1"
 
       - name: Install Android SDK
+        if: steps.existing.outputs.exists != 'true'
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Require stable signing credentials
+        if: steps.existing.outputs.exists != 'true'
         run: |
           test -n "$ROACHES_KEYSTORE_BASE64"
           test -n "$ROACHES_STORE_PASSWORD"
@@ -58,6 +89,7 @@ jobs:
           printf '%s' "$ROACHES_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/roaches-release.jks"
 
       - name: Audit and build signed release
+        if: steps.existing.outputs.exists != 'true'
         run: |
           python3 scripts/anti_slop.py
           gradle :app:testDebugUnitTest :app:lintRelease :app:assembleRelease \
@@ -68,6 +100,7 @@ jobs:
             --stacktrace
 
       - name: Verify and name APK
+        if: steps.existing.outputs.exists != 'true'
         run: |
           VERSION="${RELEASE_VERSION#v}"
           mkdir -p artifacts
@@ -76,6 +109,7 @@ jobs:
           sha256sum "artifacts/Roaches-$VERSION.apk" > "artifacts/Roaches-$VERSION.apk.sha256"
 
       - name: Publish GitHub release
+        if: steps.existing.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -83,8 +117,4 @@ jobs:
           case "$TAG" in v*) ;; *) TAG="v$TAG" ;; esac
           APK="artifacts/Roaches-${RELEASE_VERSION#v}.apk"
           CHECKSUM="$APK.sha256"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" "$CHECKSUM" --clobber
-          else
-            gh release create "$TAG" "$APK" "$CHECKSUM" --generate-notes --title "Roaches ${TAG#v}"
-          fi
+          gh release create "$TAG" "$APK" "$CHECKSUM" --generate-notes --title "Roaches ${TAG#v}"
