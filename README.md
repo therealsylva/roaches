@@ -19,7 +19,7 @@ Roaches has its own name, icon, interface and implementation.
 - saved, liked, recents and continue-watching state stored on device;
 - private app-scoped downloads with progress tracking and offline playback;
 - local video import through Android's document picker;
-- dark and light themes, audio preference and GitHub release checks;
+- dark and light themes, audio preference and verified in-app updates;
 - adaptive phone, foldable and tablet layouts;
 - no telemetry, ads, login or premium gates.
 
@@ -41,7 +41,10 @@ The `Roaches release` workflow publishes a signed APK for version tags. Add
 `ROACHES_KEYSTORE_BASE64`, `ROACHES_STORE_PASSWORD`, `ROACHES_KEY_ALIAS` and
 `ROACHES_KEY_PASSWORD` as repository secrets before running it. Keeping that
 signing key stable is required for Android to install future releases as
-updates over an existing installation.
+updates over an existing installation. Roaches verifies each release checksum
+and package identity before handing it to Android's system installer; Android
+always asks the user to approve installation. Developer debug builds use a
+separate package and require a one-time move to the first stable release.
 
 ## Quality contract
 

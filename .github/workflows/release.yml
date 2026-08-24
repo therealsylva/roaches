@@ -66,6 +66,7 @@ jobs:
           mkdir -p artifacts
           cp app/build/outputs/apk/release/roaches-release.apk "artifacts/Roaches-$VERSION.apk"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "artifacts/Roaches-$VERSION.apk"
+          sha256sum "artifacts/Roaches-$VERSION.apk" > "artifacts/Roaches-$VERSION.apk.sha256"
 
       - name: Publish GitHub release
         env:
@@ -74,8 +75,9 @@ jobs:
           TAG="$RELEASE_VERSION"
           case "$TAG" in v*) ;; *) TAG="v$TAG" ;; esac
           APK="artifacts/Roaches-${RELEASE_VERSION#v}.apk"
+          CHECKSUM="$APK.sha256"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" --clobber
+            gh release upload "$TAG" "$APK" "$CHECKSUM" --clobber
           else
-            gh release create "$TAG" "$APK" --generate-notes --title "Roaches ${TAG#v}"
+            gh release create "$TAG" "$APK" "$CHECKSUM" --generate-notes --title "Roaches ${TAG#v}"
           fi

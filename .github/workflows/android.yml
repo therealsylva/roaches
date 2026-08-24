@@ -55,6 +55,7 @@ jobs:
           android.permission.ACCESS_NETWORK_STATE
           android.permission.INTERNET
           android.permission.RECEIVE_BOOT_COMPLETED
+          android.permission.REQUEST_INSTALL_PACKAGES
           android.permission.WAKE_LOCK
           EOF
           diff -u expected-permissions.txt actual-permissions.txt

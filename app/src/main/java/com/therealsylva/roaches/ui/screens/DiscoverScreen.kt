@@ -26,7 +26,6 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,6 +46,7 @@ import com.therealsylva.roaches.data.model.BrowseCategory
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.ui.RoachesUiState
 import com.therealsylva.roaches.ui.components.ArtworkScrim
+import com.therealsylva.roaches.ui.components.ArtworkIconButton
 import com.therealsylva.roaches.ui.components.LoadingState
 import com.therealsylva.roaches.ui.components.PosterCard
 import com.therealsylva.roaches.ui.components.RoachesWordmark
@@ -252,12 +252,10 @@ private fun DiscoverHeader(onSettings: () -> Unit, modifier: Modifier = Modifier
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RoachesWordmark()
-        IconButton(onClick = onSettings) {
-            Icon(
-                imageVector = Icons.Rounded.Settings,
-                contentDescription = "Settings",
-                tint = RoachesColors.Ink,
-            )
-        }
+        ArtworkIconButton(
+            imageVector = Icons.Rounded.Settings,
+            contentDescription = "Settings",
+            onClick = onSettings,
+        )
     }
 }

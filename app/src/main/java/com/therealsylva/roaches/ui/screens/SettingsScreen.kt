@@ -55,7 +55,7 @@ fun SettingsScreen(
     historyCount: Int,
     updateLoading: Boolean,
     updateMessage: String?,
-    updateUrl: String?,
+    updateAvailable: Boolean,
     onBack: () -> Unit,
     onRegion: (ContentRegion) -> Unit,
     onQuality: (PlaybackQuality) -> Unit,
@@ -66,6 +66,7 @@ fun SettingsScreen(
     onEggsOff: () -> Unit,
     onClearHistory: () -> Unit,
     onCheckUpdates: () -> Unit,
+    onInstallUpdate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uriHandler = LocalUriHandler.current
@@ -228,17 +229,18 @@ fun SettingsScreen(
                         enabled = !updateLoading,
                         contentPadding = PaddingValues(horizontal = 0.dp, vertical = RoachesSpacing.xs),
                     ) {
-                        Text(if (updateLoading) "Checking…" else "Check for updates")
+                        Text(if (updateLoading && !updateAvailable) "Checking…" else "Check for updates")
                     }
                     updateMessage?.let { message ->
                         Text(message, style = MaterialTheme.typography.bodyMedium, color = RoachesColors.InkMuted)
                     }
-                    if (updateUrl != null) {
+                    if (updateAvailable) {
                         TextButton(
-                            onClick = { uriHandler.openUri(updateUrl) },
+                            onClick = onInstallUpdate,
+                            enabled = !updateLoading,
                             contentPadding = PaddingValues(horizontal = 0.dp, vertical = RoachesSpacing.xs),
                         ) {
-                            Text("Open update")
+                            Text(if (updateLoading) "Preparing update…" else "Download and install")
                         }
                     }
                 }

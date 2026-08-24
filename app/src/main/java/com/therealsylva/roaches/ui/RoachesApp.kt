@@ -134,7 +134,7 @@ fun RoachesApp(
                         historyCount = state.history.size,
                         updateLoading = state.updateLoading,
                         updateMessage = state.updateMessage,
-                        updateUrl = state.updateUrl,
+                        updateAvailable = state.availableUpdate != null,
                         onBack = { viewModel.goBack() },
                         onRegion = viewModel::setContentRegion,
                         onQuality = viewModel::setPlaybackQuality,
@@ -145,6 +145,7 @@ fun RoachesApp(
                         onEggsOff = viewModel::disableEggs,
                         onClearHistory = viewModel::clearHistory,
                         onCheckUpdates = viewModel::checkForUpdates,
+                        onInstallUpdate = viewModel::installUpdate,
                     )
                     AppScreen.Browse -> BrowseShell(state, viewModel)
                 }

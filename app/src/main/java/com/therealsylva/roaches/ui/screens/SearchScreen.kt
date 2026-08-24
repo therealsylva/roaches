@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -99,7 +99,10 @@ fun SearchScreen(
                         horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
                         verticalArrangement = Arrangement.spacedBy(RoachesSpacing.lg),
                     ) {
-                        items(visible, key = { it.id }) { item ->
+                        itemsIndexed(
+                            items = visible,
+                            key = { index, item -> "${item.id}:$index" },
+                        ) { _, item ->
                             PosterCard(item, { onOpen(item) }, Modifier.fillMaxWidth())
                         }
                     }

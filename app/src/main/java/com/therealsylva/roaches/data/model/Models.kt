@@ -191,6 +191,7 @@ data class ReleaseUpdate(
     val versionName: String,
     val releaseUrl: String,
     val apkUrl: String?,
+    val sha256: String?,
     val available: Boolean,
 )
 

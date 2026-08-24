@@ -20,11 +20,13 @@ import com.therealsylva.roaches.data.model.MediaDetails
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.PreferredAudio
+import com.therealsylva.roaches.data.model.ReleaseUpdate
 import com.therealsylva.roaches.data.model.SeasonDownloadProgress
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.SourceIntent
 import com.therealsylva.roaches.data.model.WatchEntry
+import com.therealsylva.roaches.data.remote.AppUpdateInstaller
 import com.therealsylva.roaches.data.remote.UpdateChecker
 import com.therealsylva.roaches.data.repository.RoachesRepository
 import kotlinx.coroutines.CancellationException
@@ -79,7 +81,7 @@ data class RoachesUiState(
     val settings: AppSettings = AppSettings(),
     val updateLoading: Boolean = false,
     val updateMessage: String? = null,
-    val updateUrl: String? = null,
+    val availableUpdate: ReleaseUpdate? = null,
     val notice: String? = null,
 )
 
@@ -87,6 +89,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     private val store = LocalStore(application)
     private var repository = RoachesRepository(store)
     private val updateChecker = UpdateChecker()
+    private val updateInstaller = AppUpdateInstaller(application)
     private val mutableState = MutableStateFlow(RoachesUiState())
     val state: StateFlow<RoachesUiState> = mutableState.asStateFlow()
 
@@ -679,19 +682,21 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
 
     fun checkForUpdates() {
         if (mutableState.value.updateLoading) return
-        mutableState.update { it.copy(updateLoading = true, updateMessage = null, updateUrl = null) }
+        mutableState.update { it.copy(updateLoading = true, updateMessage = null, availableUpdate = null) }
         viewModelScope.launch {
             runCatching { updateChecker.check() }
                 .onSuccess { release ->
+                    val installable = release.available && release.apkUrl != null && release.sha256 != null
                     mutableState.update {
                         it.copy(
                             updateLoading = false,
-                            updateMessage = if (release.available) {
-                                "Roaches ${release.versionName} is ready."
-                            } else {
-                                "Roaches is up to date."
+                            updateMessage = when {
+                                !release.available -> "Roaches is up to date."
+                                release.apkUrl == null -> "Roaches ${release.versionName} has no installable APK."
+                                release.sha256 == null -> "Roaches ${release.versionName} could not be verified."
+                                else -> "Roaches ${release.versionName} is ready."
                             },
-                            updateUrl = if (release.available) release.apkUrl ?: release.releaseUrl else null,
+                            availableUpdate = release.takeIf { installable },
                         )
                     }
                 }
@@ -703,6 +708,34 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                         )
                     }
                 }
+        }
+    }
+
+    fun installUpdate() {
+        if (mutableState.value.updateLoading) return
+        val release = mutableState.value.availableUpdate ?: return
+        mutableState.update { it.copy(updateLoading = true, updateMessage = "Starting update") }
+        viewModelScope.launch {
+            runCatching {
+                updateInstaller.downloadAndRequestInstall(release) { progress ->
+                    val message = progress.percent?.let { "${progress.message} · $it%" } ?: progress.message
+                    mutableState.update { state -> state.copy(updateMessage = message) }
+                }
+            }.onSuccess {
+                mutableState.update {
+                    it.copy(
+                        updateLoading = false,
+                        updateMessage = "Android is ready to install Roaches ${release.versionName}.",
+                    )
+                }
+            }.onFailure { failure ->
+                mutableState.update {
+                    it.copy(
+                        updateLoading = false,
+                        updateMessage = failure.userMessage("The update could not be installed."),
+                    )
+                }
+            }
         }
     }
 
