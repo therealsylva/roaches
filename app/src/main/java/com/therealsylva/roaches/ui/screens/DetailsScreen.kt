@@ -75,6 +75,7 @@ fun DetailsScreen(
     onRetry: () -> Unit,
     onWatch: () -> Unit,
     onDownloadRequest: () -> Unit,
+    onDownloadSeasonRequest: () -> Unit,
     onToggleSaved: () -> Unit,
     onToggleLiked: () -> Unit,
     onSeason: (Int) -> Unit,
@@ -83,6 +84,7 @@ fun DetailsScreen(
     onRetrySources: () -> Unit,
     onPlay: (StreamSource) -> Unit,
     onDownload: (StreamSource) -> Unit,
+    onDownloadSeason: (StreamSource) -> Unit,
     onOpenRelated: (MediaItem) -> Unit,
 ) {
     val item = state.details?.item ?: state.detailsSeed
@@ -154,6 +156,7 @@ fun DetailsScreen(
                                     onSeason = onSeason,
                                     onEpisode = onEpisode,
                                     onWatch = onWatch,
+                                    onDownloadSeason = onDownloadSeasonRequest,
                                 )
                             }
                         }
@@ -205,7 +208,7 @@ fun DetailsScreen(
                     )
                 },
             ) {
-                SourcePicker(state, onRetrySources, onPlay, onDownload)
+                SourcePicker(state, onRetrySources, onPlay, onDownload, onDownloadSeason)
             }
         }
     }
@@ -325,6 +328,7 @@ private fun EpisodePicker(
     onSeason: (Int) -> Unit,
     onEpisode: (Int) -> Unit,
     onWatch: () -> Unit,
+    onDownloadSeason: () -> Unit,
 ) {
     val seasons = state.details?.seasons.orEmpty()
     val episodes = seasons.firstOrNull { it.number == state.selectedSeason }?.episodes.orEmpty()
@@ -369,6 +373,16 @@ private fun EpisodePicker(
             Icon(Icons.Rounded.PlayArrow, contentDescription = null)
             Text("Play S${state.selectedSeason} E${state.selectedEpisode}")
         }
+        TextButton(
+            onClick = onDownloadSeason,
+            modifier = Modifier.padding(horizontal = RoachesSpacing.md).height(48.dp),
+            shape = RoachesShapes.Tight,
+            colors = ButtonDefaults.textButtonColors(contentColor = RoachesColors.InkMuted),
+        ) {
+            Icon(Icons.Rounded.Download, contentDescription = null)
+            Spacer(Modifier.width(RoachesSpacing.xs))
+            Text("Download season ${state.selectedSeason}")
+        }
     }
 }
 
@@ -390,17 +404,27 @@ private fun SourcePicker(
     onRetry: () -> Unit,
     onPlay: (StreamSource) -> Unit,
     onDownload: (StreamSource) -> Unit,
+    onDownloadSeason: (StreamSource) -> Unit,
 ) {
-    val downloading = state.sourceIntent == SourceIntent.Download
+    val downloading = state.sourceIntent != SourceIntent.Playback
+    val seasonDownload = state.sourceIntent == SourceIntent.SeasonDownload
     val media = state.details?.item ?: state.detailsSeed
     Column(Modifier.fillMaxWidth().padding(bottom = RoachesSpacing.xl)) {
         Text(
-            if (downloading) "Choose download" else "Choose playback",
+            when {
+                seasonDownload -> "Choose season download"
+                downloading -> "Choose download"
+                else -> "Choose playback"
+            },
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
         )
         Text(
-            "Each option shows its audio language when the provider reports it.",
+            if (seasonDownload) {
+                "The closest matching language and quality will be used for each episode."
+            } else {
+                "Each option shows its audio language when the provider reports it."
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = RoachesColors.InkMuted,
             modifier = Modifier.padding(horizontal = RoachesSpacing.md),
@@ -417,7 +441,13 @@ private fun SourcePicker(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable { if (downloading) onDownload(source) else onPlay(source) }
+                        .clickable {
+                            when (state.sourceIntent) {
+                                SourceIntent.Playback -> onPlay(source)
+                                SourceIntent.Download -> onDownload(source)
+                                SourceIntent.SeasonDownload -> onDownloadSeason(source)
+                            }
+                        }
                         .padding(start = RoachesSpacing.md, top = RoachesSpacing.sm, bottom = RoachesSpacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

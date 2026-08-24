@@ -117,6 +117,7 @@ fun RoachesApp(
                         onRetry = viewModel::retryDetails,
                         onWatch = { viewModel.requestSources(SourceIntent.Playback) },
                         onDownloadRequest = { viewModel.requestSources(SourceIntent.Download) },
+                        onDownloadSeasonRequest = { viewModel.requestSources(SourceIntent.SeasonDownload) },
                         onToggleSaved = viewModel::toggleSaved,
                         onToggleLiked = viewModel::toggleLiked,
                         onSeason = viewModel::selectSeason,
@@ -125,6 +126,7 @@ fun RoachesApp(
                         onRetrySources = viewModel::retrySources,
                         onPlay = viewModel::play,
                         onDownload = viewModel::download,
+                        onDownloadSeason = viewModel::downloadSeason,
                         onOpenRelated = viewModel::openDetails,
                     )
                     AppScreen.Settings -> SettingsScreen(
@@ -207,9 +209,12 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                 )
                 MainDestination.Downloads -> DownloadsScreen(
                     downloads = state.downloads,
+                    seasonDownloads = state.seasonDownloads,
                     onRefresh = viewModel::refreshDownloads,
                     onRemove = viewModel::removeDownload,
                     onPlay = viewModel::playDownload,
+                    onCancelSeason = viewModel::cancelSeasonDownload,
+                    onRetrySeason = viewModel::retrySeasonDownload,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

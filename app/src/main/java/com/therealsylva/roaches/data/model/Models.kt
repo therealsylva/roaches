@@ -138,7 +138,49 @@ data class WatchEntry(
 
 enum class DownloadState { Queued, Downloading, Complete, Failed, Missing }
 
-enum class SourceIntent { Playback, Download }
+enum class SourceIntent { Playback, Download, SeasonDownload }
+
+data class DownloadPreference(
+    val resolution: Int = 0,
+    val audio: String? = null,
+)
+
+data class SeasonDownloadTask(
+    val id: String,
+    val batchId: String,
+    val media: MediaItem,
+    val season: Int,
+    val episode: Int,
+    val episodeTitle: String,
+    val preference: DownloadPreference,
+    val batchSize: Int,
+    val createdAt: Long,
+    val attempts: Int = 0,
+    val lastError: String? = null,
+) {
+    val targetKey: String
+        get() = downloadTargetKey(media.id, season, episode)
+}
+
+data class SeasonDownloadProgress(
+    val batchId: String,
+    val media: MediaItem,
+    val season: Int,
+    val totalCount: Int,
+    val readyCount: Int,
+    val failedCount: Int,
+    val queuedCount: Int,
+    val activeEpisode: Int? = null,
+    val activeProgress: Float = 0f,
+    val statusMessage: String? = null,
+) {
+    val progress: Float
+        get() = if (totalCount <= 0) {
+            0f
+        } else {
+            ((readyCount + activeProgress.coerceIn(0f, 1f)) / totalCount.toFloat()).coerceIn(0f, 1f)
+        }
+}
 
 data class ReleaseUpdate(
     val versionName: String,
@@ -152,7 +194,19 @@ data class DownloadEntry(
     val media: MediaItem,
     val source: StreamSource,
     val createdAt: Long,
+    val season: Int = 0,
+    val episode: Int = 0,
+    val episodeTitle: String? = null,
+    val batchId: String? = null,
+    val batchSize: Int = 0,
     val state: DownloadState = DownloadState.Queued,
     val progress: Float = 0f,
     val localUri: String? = null,
-)
+    val statusMessage: String? = null,
+) {
+    val targetKey: String
+        get() = downloadTargetKey(media.id, season, episode)
+}
+
+fun downloadTargetKey(subjectId: String, season: Int, episode: Int): String =
+    "$subjectId:${season.coerceAtLeast(0)}:${episode.coerceAtLeast(0)}"
