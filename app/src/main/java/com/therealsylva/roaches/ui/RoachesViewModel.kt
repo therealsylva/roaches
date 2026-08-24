@@ -796,9 +796,8 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
             .distinctBy(MediaItem::id)
             .take(12)
         mutableState.update { it.copy(related = local) }
-        val query = details.genres.firstOrNull()?.takeIf(String::isNotBlank) ?: return
         viewModelScope.launch {
-            val remote = runCatching { repository.search(query) }.getOrDefault(emptyList())
+            val remote = runCatching { repository.recommendations(details) }.getOrDefault(emptyList())
             mutableState.update { current ->
                 if (current.details?.item?.id != details.item.id) current else current.copy(
                     related = (remote + local)

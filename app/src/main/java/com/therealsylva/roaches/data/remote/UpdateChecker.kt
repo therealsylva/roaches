@@ -79,7 +79,6 @@ class UpdateChecker(
         const val RELEASES_URL = "$REPOSITORY_URL/releases"
         private val LATEST_RELEASE_URLS = listOf(
             "https://api.github.com/repos/therealsylva/roaches/releases/latest",
-            "https://api.github.com/repos/therealsylva/movieboxxed/releases/latest",
         )
     }
 }

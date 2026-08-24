@@ -5,10 +5,6 @@ community-indexed film and television streams. It is intentionally free of
 advertising SDKs, analytics, attribution code, accounts, subscriptions and
 paywalls.
 
-The application is not affiliated with MovieBox or Netflix. Netflix is used
-only as a product-quality reference for content hierarchy and playback polish;
-Roaches has its own name, icon, interface and implementation.
-
 ## Product surface
 
 - artwork-led Home with a rotating feature, editorial shelves and genre browsing;
@@ -51,9 +47,3 @@ separate package and require a one-time move to the first stable release.
 The interface is governed by [DESIGN.md](DESIGN.md). The CI pipeline treats
 design-token drift, prohibited UI patterns, tests, lint and APK assembly as
 release gates rather than optional polish.
-
-## Upstream protocol attribution
-
-The clean-room request signing and endpoint behaviour were independently
-ported from the open-source MovieBox-TUI provider. See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

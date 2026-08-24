@@ -49,8 +49,21 @@ class RoachesRepository(private val store: LocalStore) {
     )
 
     suspend fun search(query: String, page: Int = 1): List<MediaItem> {
-        if (!settings.matureContentUnlocked && isMatureSearchQuery(query)) {
+        val matureQuery = isMatureSearchQuery(query)
+        if (!settings.matureContentUnlocked && matureQuery) {
             return emptyList()
+        }
+        // Eggs unlocks deliberate mature searches; it must never turn ordinary
+        // searches or recommendations into an unfiltered provider feed.
+        val allowMature = settings.matureContentUnlocked && matureQuery
+        if (page == 1 && isGenericAnimationDiscoveryQuery(query)) {
+            return parseCatalogueResults(
+                api.catalogue(
+                    genre = "Animation",
+                    country = settings.contentRegion.providerCountry(),
+                ),
+                settings.contentRegion,
+            )
         }
         var mobileFailure: Throwable? = null
         val mobileResults = try {
@@ -59,7 +72,7 @@ class RoachesRepository(private val store: LocalStore) {
                 query,
                 settings.preferredAudio,
                 settings.contentRegion,
-                settings.matureContentUnlocked,
+                allowMature,
             )
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -71,7 +84,7 @@ class RoachesRepository(private val store: LocalStore) {
             mobileResults,
             query,
             page,
-            settings.matureContentUnlocked,
+            allowMature,
         )
         if (!shouldSearchWebsite) {
             mobileFailure?.let { throw it }
@@ -84,7 +97,7 @@ class RoachesRepository(private val store: LocalStore) {
                 query,
                 settings.preferredAudio,
                 settings.contentRegion,
-                settings.matureContentUnlocked,
+                allowMature,
             )
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -103,6 +116,17 @@ class RoachesRepository(private val store: LocalStore) {
             page = page,
         )
         return parseCatalogueResults(payload, settings.contentRegion)
+    }
+
+    suspend fun recommendations(details: MediaDetails): List<MediaItem> {
+        val payload = api.catalogue(
+            genre = selectRecommendationGenre(details.genres) ?: "All",
+            country = settings.contentRegion.providerCountry(),
+        )
+        // Recommendations are passive discovery. Even when Eggs is unlocked,
+        // mature rows are only eligible for a deliberate mature search.
+        return parseCatalogueResults(payload, settings.contentRegion)
+            .filter { candidate -> candidate.id != details.item.id }
     }
 
     suspend fun details(seed: MediaItem): MediaDetails {
@@ -564,7 +588,7 @@ internal fun parseSearchResults(
             RankedMedia(item, value.variantPenalty(preferredAudio), index)
         }
     }.sortedWith(compareBy<RankedMedia>(RankedMedia::penalty).thenBy(RankedMedia::index))
-        // MovieBox may return one row per season while reusing the same subject ID.
+        // The provider may return one row per season while reusing the same subject ID.
         // Compose requires stable unique item keys, and the subject page already owns
         // season selection, so expose only the provider's best row for each subject.
         .distinctBy { ranked -> ranked.item.id }
@@ -604,6 +628,22 @@ internal fun isMatureSearchQuery(query: String): Boolean {
         .toList()
     return otherWords.isEmpty() || otherWords.all { word -> word.all(Char::isDigit) } ||
         MATURE_QUERY_INTENT_MARKER.containsMatchIn(query)
+}
+
+internal fun isGenericAnimationDiscoveryQuery(query: String): Boolean {
+    val words = QUERY_WORD_MARKER.findAll(query)
+        .map { match -> match.value.lowercase(Locale.US) }
+        .toList()
+    return words.isNotEmpty() && words.all(GENERIC_ANIMATION_QUERY_WORDS::contains) &&
+        words.any { word -> word == "anime" || word == "animation" || word == "animated" }
+}
+
+internal fun selectRecommendationGenre(genres: List<String>): String? {
+    val cleaned = genres.map(String::trim).filter(String::isNotBlank)
+    return cleaned.firstOrNull { genre ->
+        !GENERIC_ANIMATION_GENRE.matches(genre) &&
+            !MATURE_GENRE_MARKER.containsMatchIn(genre)
+    } ?: cleaned.firstOrNull(GENERIC_ANIMATION_GENRE::matches)?.let { "Animation" }
 }
 
 internal fun mergeSearchResults(
@@ -681,14 +721,13 @@ private fun JSONObject.isCatalogueTitle(): Boolean {
 private fun JSONObject.isAllowedInCatalogue(): Boolean {
     val title = string("title", "name").orEmpty()
     val country = string("countryName", "country", "area").orEmpty()
-    val genre = string("genre", "genres").orEmpty()
     val language = string("language", "lanName", "audio", "originalLanguage").orEmpty()
     val taggedIndianAudio = INDIAN_AUDIO_MARKER.containsMatchIn(title)
     val originalOrEnglishAvailable = ORIGINAL_OR_ENGLISH_MARKER.containsMatchIn(language)
-    return !INDIA_MARKER.containsMatchIn(country) &&
+    return !isMatureSearchResult() &&
+        !INDIA_MARKER.containsMatchIn(country) &&
         !INDIA_CONTENT_MARKER.containsMatchIn(title) &&
-        (!taggedIndianAudio || originalOrEnglishAvailable) &&
-        !ADULT_MARKER.containsMatchIn(genre)
+        (!taggedIndianAudio || originalOrEnglishAvailable)
 }
 
 private fun JSONObject.cataloguePenalty(region: ContentRegion): Int = listOfNotNull(
@@ -729,6 +768,7 @@ private fun JSONObject.isMatureSearchResult(): Boolean {
     val adultFlag = listOf("isAdult", "adult", "isMature", "mature")
         .any { key -> booleanOrNull(key) == true }
     return adultFlag ||
+        int("restrictKid") > 0 ||
         MATURE_GENRE_MARKER.containsMatchIn(genre) ||
         MATURE_RATING_MARKER.containsMatchIn(classification) ||
         MATURE_TEXT_MARKER.containsMatchIn("$title $description")
@@ -836,7 +876,6 @@ private val INDIAN_AUDIO_MARKER = Regex(
     "(?i)\\b(hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|bangla|marathi)\\b",
 )
 private val ORIGINAL_OR_ENGLISH_MARKER = Regex("(?i)\\b(original|english|eng)\\b")
-private val ADULT_MARKER = Regex("(?i)\\badult\\b")
 private val MATURE_GENRE_MARKER = Regex(
     "(?i)(?:\\b(?:adults?|erotic(?:a)?|porn(?:o|ographic|ography)?|xxx|hentai|ecchi|" +
         "nsfw|r18|uncensored)\\b|18\\s*\\+)",
@@ -845,6 +884,7 @@ private val MATURE_TEXT_MARKER = Regex(
     "(?i)(?:\\b(?:adults?|erotic(?:a)?|porn(?:o|ographic|ography)?|xxx|hentai|ecchi|jav|" +
         "nsfw|r18|hardcore|softcore|onlyfans|" +
         "milfs?|dilfs?|blowjobs?|handjobs?|fuck(?:s|ed|ing|er|ers)?|cum(?:s|med|ming)?|" +
+        "orgasms?|seduc(?:e|ed|es|ing|tion)|rapists?|carnal|harems?|" +
         "step[- ]?(?:sis|sister|mom|mother|bro|brother|dad|father)s?|threesomes?|" +
         "gangbangs?|orgy|orgies|bdsm|fetish(?:es)?|incest|camgirls?|swingers?|" +
         "uncensored)\\b|18\\s*\\+)",
@@ -861,6 +901,19 @@ private val MATURE_RATING_MARKER = Regex(
     "(?i)(?:\\b(?:NC-17|R18|Adults?|X|XXX)\\b|18\\s*\\+)",
 )
 private val QUERY_WORD_MARKER = Regex("[\\p{L}\\p{N}]+")
+private val GENERIC_ANIMATION_QUERY_WORDS = setOf(
+    "anime",
+    "animation",
+    "animated",
+    "cartoon",
+    "cartoons",
+    "movie",
+    "movies",
+    "series",
+    "show",
+    "shows",
+)
+private val GENERIC_ANIMATION_GENRE = Regex("(?i)^(?:anime|animation|animated)$")
 private val UK_MARKER = Regex("(?i)\\b(united kingdom|british|britain|england|english)\\b")
 private val NIGERIA_MARKER = Regex("(?i)\\b(nigeria|nigerian|nollywood)\\b")
 private val DECORATIVE_SYMBOL = Regex("[\\p{So}\\p{Sk}\\uFE0F\\u200D]")

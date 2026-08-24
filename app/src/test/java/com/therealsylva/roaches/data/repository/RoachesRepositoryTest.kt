@@ -220,6 +220,24 @@ class RoachesRepositoryTest {
     }
 
     @Test
+    fun genericAnimationDiscoveryDetectionDoesNotHijackSpecificTitles() {
+        listOf("anime", "Anime movies", "animated shows", "animation series").forEach { query ->
+            assertThat(isGenericAnimationDiscoveryQuery(query)).isTrue()
+        }
+        listOf("Anime War", "Castlevania", "Toy Story", "animated Spider-Man").forEach { query ->
+            assertThat(isGenericAnimationDiscoveryQuery(query)).isFalse()
+        }
+    }
+
+    @Test
+    fun recommendationsPreferSpecificGenreOverGenericAnimation() {
+        assertThat(selectRecommendationGenre(listOf("Animation", "Action", "Adventure")))
+            .isEqualTo("Action")
+        assertThat(selectRecommendationGenre(listOf("Anime"))).isEqualTo("Animation")
+        assertThat(selectRecommendationGenre(listOf("Hentai", "Fantasy"))).isEqualTo("Fantasy")
+    }
+
+    @Test
     fun websiteExactMatchRanksAheadOfMobileRelatedResultsAndDeduplicates() {
         val mobile = listOf(
             MediaItem("brand-new-day", "Brand New Day", MediaKind.Movie, year = "2026"),
@@ -306,6 +324,7 @@ class RoachesRepositoryTest {
                 {"subjectId":"explicit-title","title":"Adult Content","subjectType":1,"genre":"Comedy"},
                 {"subjectId":"plural-title","title":"Adults Only! S1-S3","subjectType":2,"genre":"Documentary"},
                 {"subjectId":"adult-flag","title":"Generic title","subjectType":1,"isAdult":true},
+                {"subjectId":"provider-kid-lock","title":"Weak provider row","subjectType":2,"restrictKid":1},
                 {"subjectId":"adult-rating","title":"Weak metadata","subjectType":1,"contentRating":"TV-MA"},
                 {"subjectId":"clean","title":"Family Adventure","subjectType":1,"genre":"Family, Adventure"}
               ]
@@ -392,7 +411,7 @@ class RoachesRepositoryTest {
     }
 
     @Test
-    fun unlockedSearchReturnsMovieBoxMatureResults() {
+    fun unlockedSearchReturnsProviderMatureResults() {
         val payload = JSONObject(
             """
             {
