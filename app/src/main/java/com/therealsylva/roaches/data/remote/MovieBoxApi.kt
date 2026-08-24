@@ -35,18 +35,22 @@ internal class MovieBoxApi(
         .build(),
 ) {
     companion object {
-        private val HOSTS = listOf(
-            "https://api.aoneroom.com",
-            "https://api3.aoneroom.com",
+        internal val HOSTS = listOf(
             "https://api6.aoneroom.com",
+            "https://api5.aoneroom.com",
             "https://api4.aoneroom.com",
             "https://api4sg.aoneroom.com",
-            "https://api5.aoneroom.com",
+            "https://api3.aoneroom.com",
+            "https://api6sg.aoneroom.com",
+            "https://api.inmoviebox.com",
         )
         private val AUTH_FAILURES = setOf(401, 441)
         private val RETRYABLE = setOf(401, 403, 406, 407, 429, 441, 500, 502, 503, 504)
         private val JSON = "application/json".toMediaType()
         private const val SESSION_PATH = "/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version="
+
+        internal fun jsonRequestBody(body: String) =
+            body.toByteArray(StandardCharsets.UTF_8).toRequestBody(JSON)
     }
 
     private val signer = RequestSigner(identity)
@@ -182,7 +186,7 @@ internal class MovieBoxApi(
                 val headers = signer.headers(method, url, body, token.get())
                 val request = Request.Builder().url(url).apply {
                     headers.forEach { (name, value) -> header(name, value) }
-                    if (method == "POST") post(body.orEmpty().toRequestBody(JSON)) else get()
+                    if (method == "POST") post(jsonRequestBody(body.orEmpty())) else get()
                 }.build()
 
                 try {

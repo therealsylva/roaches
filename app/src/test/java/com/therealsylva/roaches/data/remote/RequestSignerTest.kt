@@ -2,6 +2,7 @@ package com.therealsylva.roaches.data.remote
 
 import com.google.common.truth.Truth.assertThat
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okio.Buffer
 import org.json.JSONObject
 import org.junit.Test
 
@@ -39,5 +40,36 @@ class RequestSignerTest {
 
         assertThat(headers["X-Forwarded-For"]).isEqualTo("103.241.80.40")
         assertThat(headers["X-Tr-Signature"]).startsWith("1787500000000|2|")
+    }
+
+    @Test
+    fun postBodyPreservesTheContentTypeUsedByTheSignature() {
+        val json = "{\"keyword\":\"Dune\"}"
+        val body = MovieBoxApi.jsonRequestBody(json)
+        val signedContentType = RequestSigner(identity).headers(
+            method = "POST",
+            url = "https://api6.aoneroom.com/wefeed-mobile-bff/subject-api/search/v2".toHttpUrl(),
+            body = json,
+            bearerToken = null,
+        )["Content-Type"]
+        val buffer = Buffer()
+
+        body.writeTo(buffer)
+
+        assertThat(body.contentType().toString()).isEqualTo(signedContentType)
+        assertThat(buffer.readUtf8()).isEqualTo(json)
+    }
+
+    @Test
+    fun hostFallbacksMatchTheUpstreamProvider() {
+        assertThat(MovieBoxApi.HOSTS).containsExactly(
+            "https://api6.aoneroom.com",
+            "https://api5.aoneroom.com",
+            "https://api4.aoneroom.com",
+            "https://api4sg.aoneroom.com",
+            "https://api3.aoneroom.com",
+            "https://api6sg.aoneroom.com",
+            "https://api.inmoviebox.com",
+        ).inOrder()
     }
 }
