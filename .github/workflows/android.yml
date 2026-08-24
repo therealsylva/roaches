@@ -44,6 +44,7 @@ jobs:
         run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Verify APK signature and permissions
+        if: always()
         run: |
           APK="app/build/outputs/apk/debug/roaches-debug.apk"
           test -f "$APK"
@@ -59,6 +60,7 @@ jobs:
           diff -u expected-permissions.txt actual-permissions.txt
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: roaches-debug-apk
           path: app/build/outputs/apk/debug/roaches-debug.apk
