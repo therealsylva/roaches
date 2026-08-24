@@ -1,34 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M50,36 C44,27 37,20 28,16 M58,36 C64,27 71,20 80,16"
-        android:strokeColor="#F2F0E9"
-        android:strokeLineCap="round"
-        android:strokeWidth="3" />
-    <path
-        android:fillColor="#C47A45"
-        android:pathData="M54,31 C45,31 39,39 39,51 L39,72 C39,83 45,90 54,92 C63,90 69,83 69,72 L69,51 C69,39 63,31 54,31Z" />
-    <path
-        android:fillColor="#090A0B"
-        android:pathData="M54,36 C47,36 44,43 44,52 L44,70 C44,78 48,84 54,86 C60,84 64,78 64,70 L64,52 C64,43 61,36 54,36Z" />
-    <path
-        android:fillColor="#F2F0E9"
-        android:pathData="M54,31 C49,31 45,35 44,41 L64,41 C63,35 59,31 54,31Z" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M43,48 L25,39 M42,59 L22,58 M43,70 L27,82 M65,48 L83,39 M66,59 L86,58 M65,70 L81,82"
-        android:strokeColor="#F2F0E9"
-        android:strokeLineCap="round"
-        android:strokeWidth="3" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M54,43 L54,85 M44,55 L64,55 M44,69 L64,69"
-        android:strokeColor="#C47A45"
-        android:strokeLineCap="round"
-        android:strokeWidth="2" />
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <bitmap
+            android:gravity="fill"
+            android:src="@drawable/roaches_launcher" />
+    </item>
+</layer-list>

@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.therealsylva.roaches.ui.screens.DetailsScreen
+import com.therealsylva.roaches.ui.screens.CategoryScreen
 import com.therealsylva.roaches.ui.screens.DiscoverScreen
 import com.therealsylva.roaches.ui.screens.DownloadsScreen
 import com.therealsylva.roaches.ui.screens.LibraryScreen
@@ -43,6 +44,8 @@ import com.therealsylva.roaches.ui.screens.PlayerScreen
 import com.therealsylva.roaches.ui.screens.SearchScreen
 import com.therealsylva.roaches.ui.screens.SettingsScreen
 import com.therealsylva.roaches.ui.theme.RoachesColors
+import com.therealsylva.roaches.ui.theme.RoachesTheme
+import com.therealsylva.roaches.data.model.SourceIntent
 import kotlinx.coroutines.delay
 
 @Composable
@@ -52,6 +55,8 @@ fun RoachesApp(
     isInPictureInPicture: () -> Boolean,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    RoachesTheme(darkTheme = state.settings.darkTheme) {
 
     BackHandler(enabled = state.screen != AppScreen.Browse) {
         viewModel.goBack()
@@ -66,37 +71,59 @@ fun RoachesApp(
 
     Box(Modifier.fillMaxSize().background(RoachesColors.Canvas)) {
         when (state.screen) {
-            AppScreen.Player -> PlayerScreen(
-                media = state.playerMedia,
-                source = state.playerSource,
-                captionsLoading = state.captionsLoading,
-                resumePositionMs = state.history.firstOrNull { it.media.id == state.playerMedia?.id }?.positionMs ?: 0L,
+            AppScreen.Player -> RoachesTheme(darkTheme = true) {
+                PlayerScreen(
+                    media = state.playerMedia,
+                    source = state.playerSource,
+                    captionsLoading = state.captionsLoading,
+                    resumePositionMs = state.history.firstOrNull { it.media.id == state.playerMedia?.id }?.positionMs ?: 0L,
+                    onBack = { viewModel.goBack() },
+                    onProgress = viewModel::recordProgress,
+                    onPlayerMode = onPlayerMode,
+                    isInPictureInPicture = isInPictureInPicture,
+                )
+            }
+            AppScreen.Category -> CategoryScreen(
+                category = state.category,
+                results = state.categoryResults,
+                loading = state.categoryLoading,
+                error = state.categoryError,
                 onBack = { viewModel.goBack() },
-                onProgress = viewModel::recordProgress,
-                onPlayerMode = onPlayerMode,
-                isInPictureInPicture = isInPictureInPicture,
+                onRetry = viewModel::retryCategory,
+                onOpen = viewModel::openDetails,
             )
             AppScreen.Details -> DetailsScreen(
                 state = state,
                 saved = viewModel.isSaved(state.details?.item ?: state.detailsSeed),
+                liked = viewModel.isLiked(state.details?.item ?: state.detailsSeed),
                 onBack = { viewModel.goBack() },
                 onRetry = viewModel::retryDetails,
-                onWatch = viewModel::requestSources,
+                onWatch = { viewModel.requestSources(SourceIntent.Playback) },
+                onDownloadRequest = { viewModel.requestSources(SourceIntent.Download) },
                 onToggleSaved = viewModel::toggleSaved,
+                onToggleLiked = viewModel::toggleLiked,
                 onSeason = viewModel::selectSeason,
                 onEpisode = viewModel::selectEpisode,
                 onDismissSources = viewModel::dismissSourcePicker,
+                onRetrySources = viewModel::retrySources,
                 onPlay = viewModel::play,
                 onDownload = viewModel::download,
+                onOpenRelated = viewModel::openDetails,
             )
             AppScreen.Settings -> SettingsScreen(
                 settings = state.settings,
                 historyCount = state.history.size,
+                updateLoading = state.updateLoading,
+                updateMessage = state.updateMessage,
+                updateUrl = state.updateUrl,
                 onBack = { viewModel.goBack() },
                 onRegion = viewModel::setContentRegion,
                 onQuality = viewModel::setPlaybackQuality,
+                onAudio = viewModel::setPreferredAudio,
                 onWifiOnly = viewModel::setWifiOnlyDownloads,
+                onDarkTheme = viewModel::setDarkTheme,
                 onClearHistory = viewModel::clearHistory,
+                onCheckUpdates = viewModel::checkForUpdates,
             )
             AppScreen.Browse -> BrowseShell(state, viewModel)
         }
@@ -111,6 +138,7 @@ fun RoachesApp(
                 contentColor = RoachesColors.Canvas,
             ) { Text(notice, style = MaterialTheme.typography.labelLarge) }
         }
+    }
     }
 }
 
@@ -133,6 +161,7 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                     state = state,
                     onRetry = viewModel::loadDiscover,
                     onSettings = viewModel::openSettings,
+                    onCategory = viewModel::openCategory,
                     onOpen = viewModel::openDetails,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -149,7 +178,12 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                 )
                 MainDestination.Library -> LibraryScreen(
                     watchlist = state.watchlist,
+                    liked = state.liked,
                     history = state.history,
+                    localMedia = state.localMedia,
+                    onImport = viewModel::importLocalMedia,
+                    onPlayLocal = viewModel::playLocalMedia,
+                    onRemoveLocal = viewModel::removeLocalMedia,
                     onOpen = viewModel::openDetails,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -157,7 +191,7 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                     downloads = state.downloads,
                     onRefresh = viewModel::refreshDownloads,
                     onRemove = viewModel::removeDownload,
-                    onOpen = viewModel::openDetails,
+                    onPlay = viewModel::playDownload,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -174,7 +208,7 @@ private data class NavItem(
 @Composable
 private fun RoachesNavigation(selected: MainDestination, onSelect: (MainDestination) -> Unit) {
     val items = listOf(
-        NavItem(MainDestination.Discover, "Discover", Icons.Rounded.Home),
+        NavItem(MainDestination.Discover, "Home", Icons.Rounded.Home),
         NavItem(MainDestination.Search, "Search", Icons.Rounded.Search),
         NavItem(MainDestination.Library, "Library", Icons.Rounded.VideoLibrary),
         NavItem(MainDestination.Downloads, "Downloads", Icons.Rounded.Download),

@@ -7,6 +7,7 @@ import com.therealsylva.roaches.data.model.MediaDetails
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
 import com.therealsylva.roaches.data.model.PlaybackQuality
+import com.therealsylva.roaches.data.model.PreferredAudio
 import com.therealsylva.roaches.data.model.Season
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
@@ -53,11 +54,11 @@ class RoachesRepository(store: LocalStore) {
 
     suspend fun details(seed: MediaItem): MediaDetails {
         val initial = api.details(seed.id)
-        val preferredId = initial.preferredSubjectId(seed.id)
-        val json = if (preferredId == seed.id) {
+        val preferred = initial.preferredSubject(settings.preferredAudio, seed.id)
+        val json = if (preferred.id == seed.id) {
             initial
         } else {
-            runCatching { api.details(preferredId) }.getOrDefault(initial)
+            runCatching { api.details(preferred.id) }.getOrDefault(initial)
         }
         val parsed = json.toMediaItem() ?: seed
         val item = parsed.copy(
@@ -74,11 +75,17 @@ class RoachesRepository(store: LocalStore) {
             director = json.string("director", "directors"),
             cast = json.string("stars", "actors", "cast"),
             country = json.string("countryName", "country"),
+            audioLanguage = preferred.language ?: json.string("lanName", "language", "audio"),
             seasons = parseSeasons(json.opt("seasons")),
         )
     }
 
-    suspend fun sources(subjectId: String, season: Int, episode: Int): List<StreamSource> {
+    suspend fun sources(
+        subjectId: String,
+        season: Int,
+        episode: Int,
+        languageHint: String? = null,
+    ): List<StreamSource> {
         val payload = api.resources(subjectId, season, episode)
         val resources = when (payload) {
             is JSONArray -> payload
@@ -94,8 +101,10 @@ class RoachesRepository(store: LocalStore) {
                         resourceId = source.string("resourceId", "id").orEmpty(),
                         url = url,
                         resolution = source.int("resolution", "quality"),
-                        codec = source.string("codec", "encode", "format"),
-                        audio = source.string("audio", "language", "lanName"),
+                        codec = source.string("codec", "codecName", "encode", "format"),
+                        audio = source.string("audio", "language", "lanName")
+                            ?: detectLanguage(source.string("filename", "fileName", "name", "title"))
+                            ?: languageHint,
                         sizeBytes = source.longOrNull("size", "fileSize", "sizeBytes"),
                         filename = source.string("filename", "fileName", "name"),
                     ),
@@ -188,21 +197,32 @@ private fun JSONObject.variantPenalty(): Int {
     }
 }
 
-private fun JSONObject.preferredSubjectId(fallback: String): String {
-    val dubs = optJSONArray("dubs") ?: return fallback
-    return buildList {
+private data class SubjectVariant(val id: String, val language: String?)
+
+private fun JSONObject.preferredSubject(preference: PreferredAudio, fallback: String): SubjectVariant {
+    val dubs = optJSONArray("dubs") ?: return SubjectVariant(fallback, null)
+    val variants = buildList {
         repeat(dubs.length()) { index ->
             val dub = dubs.optJSONObject(index) ?: return@repeat
             val id = dub.string("subjectId", "id") ?: return@repeat
             val language = dub.string("lanName", "language", "name").orEmpty()
-            val priority = when {
-                language.contains("original", ignoreCase = true) -> 0
-                language.contains("english", ignoreCase = true) -> 1
-                else -> 2
-            }
-            add(Triple(priority, index, id))
+            add(Triple(index, id, language))
         }
-    }.minWithOrNull(compareBy<Triple<Int, Int, String>> { it.first }.thenBy { it.second })?.third ?: fallback
+    }
+    if (variants.isEmpty()) return SubjectVariant(fallback, null)
+    val chosen = variants.minWithOrNull(
+        compareBy<Triple<Int, String, String>> { variant ->
+            val language = variant.third
+            when {
+                preference == PreferredAudio.Any -> 0
+                preference.matches.any { language.contains(it, ignoreCase = true) } -> 0
+                language.contains("original", ignoreCase = true) -> 1
+                language.contains("english", ignoreCase = true) -> 2
+                else -> 3
+            }
+        }.thenBy { it.first },
+    ) ?: return SubjectVariant(fallback, null)
+    return SubjectVariant(chosen.second, chosen.third.takeIf(String::isNotBlank))
 }
 
 private fun String.regionalPenalty(region: ContentRegion): Int = when (region) {
@@ -326,4 +346,18 @@ private fun cleanTitle(raw: String): String {
         title = title.substringBeforeLast(" - ").trim()
     }
     return title.trimEnd('-', ':', '_', '.', ' ').ifBlank { raw.trim() }
+}
+
+private fun detectLanguage(value: String?): String? {
+    val text = value?.lowercase(Locale.US).orEmpty()
+    return when {
+        "multi audio" in text || "multi-audio" in text -> "Multi audio"
+        "dual audio" in text || "dual-audio" in text -> "Dual audio"
+        Regex("\\b(english|eng)\\b").containsMatchIn(text) -> "English"
+        Regex("\\b(french|fra)\\b").containsMatchIn(text) -> "French"
+        Regex("\\b(spanish|spa)\\b").containsMatchIn(text) -> "Spanish"
+        Regex("\\b(arabic|ara)\\b").containsMatchIn(text) -> "Arabic"
+        Regex("\\b(hindi|hin)\\b").containsMatchIn(text) -> "Hindi"
+        else -> null
+    }
 }

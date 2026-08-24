@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,12 +27,16 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.therealsylva.roaches.BuildConfig
 import com.therealsylva.roaches.data.model.AppSettings
 import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.PlaybackQuality
+import com.therealsylva.roaches.data.model.PreferredAudio
+import com.therealsylva.roaches.data.remote.UpdateChecker
+import com.therealsylva.roaches.ui.components.RoachesWordmark
 import com.therealsylva.roaches.ui.theme.RoachesColors
 import com.therealsylva.roaches.ui.theme.RoachesSpacing
 
@@ -39,13 +44,20 @@ import com.therealsylva.roaches.ui.theme.RoachesSpacing
 fun SettingsScreen(
     settings: AppSettings,
     historyCount: Int,
+    updateLoading: Boolean,
+    updateMessage: String?,
+    updateUrl: String?,
     onBack: () -> Unit,
     onRegion: (ContentRegion) -> Unit,
     onQuality: (PlaybackQuality) -> Unit,
+    onAudio: (PreferredAudio) -> Unit,
     onWifiOnly: (Boolean) -> Unit,
+    onDarkTheme: (Boolean) -> Unit,
     onClearHistory: () -> Unit,
+    onCheckUpdates: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val uriHandler = LocalUriHandler.current
     Column(modifier.fillMaxSize().statusBarsPadding()) {
         Row(
             Modifier
@@ -58,6 +70,8 @@ fun SettingsScreen(
                 Icon(Icons.Rounded.ArrowBack, contentDescription = "Back")
             }
             Text("Settings", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.weight(1f))
+            RoachesWordmark()
         }
 
         LazyColumn(
@@ -72,8 +86,8 @@ fun SettingsScreen(
         ) {
             item {
                 SettingsSection(
-                    title = "Catalogue region",
-                    description = "Sets the Discover feed. Search still covers the full catalogue.",
+                    title = "Home feed region",
+                    description = "Chooses what Roaches puts first on Home. Search stays global.",
                 ) {
                     ContentRegion.entries.forEach { region ->
                         ChoiceRow(
@@ -82,6 +96,34 @@ fun SettingsScreen(
                             onClick = { onRegion(region) },
                         )
                     }
+                }
+            }
+
+            item {
+                SettingsSection(
+                    title = "Audio language",
+                    description = "Roaches prefers this version of a title when the provider offers it.",
+                ) {
+                    PreferredAudio.entries.forEach { audio ->
+                        ChoiceRow(
+                            title = audio.label,
+                            selected = settings.preferredAudio == audio,
+                            onClick = { onAudio(audio) },
+                        )
+                    }
+                }
+            }
+
+            item {
+                SettingsSection(
+                    title = "Appearance",
+                    description = "Use the light palette when dark screens are uncomfortable.",
+                ) {
+                    ToggleRow(
+                        title = "Dark theme",
+                        checked = settings.darkTheme,
+                        onChecked = onDarkTheme,
+                    )
                 }
             }
 
@@ -96,6 +138,32 @@ fun SettingsScreen(
                             selected = settings.playbackQuality == quality,
                             onClick = { onQuality(quality) },
                         )
+                    }
+                }
+            }
+
+            item {
+                SettingsSection(
+                    title = "Updates",
+                    description = "Checks published Roaches releases on GitHub.",
+                ) {
+                    TextButton(
+                        onClick = onCheckUpdates,
+                        enabled = !updateLoading,
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = RoachesSpacing.xs),
+                    ) {
+                        Text(if (updateLoading) "Checking…" else "Check for updates")
+                    }
+                    updateMessage?.let { message ->
+                        Text(message, style = MaterialTheme.typography.bodyMedium, color = RoachesColors.InkMuted)
+                    }
+                    if (updateUrl != null) {
+                        TextButton(
+                            onClick = { uriHandler.openUri(updateUrl) },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = RoachesSpacing.xs),
+                        ) {
+                            Text("Open update")
+                        }
                     }
                 }
             }
@@ -142,6 +210,18 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = RoachesColors.InkMuted,
                     )
+                    TextButton(
+                        onClick = { uriHandler.openUri(UpdateChecker.REPOSITORY_URL) },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = RoachesSpacing.xs),
+                    ) {
+                        Text("GitHub · therealsylva")
+                    }
+                    TextButton(
+                        onClick = { uriHandler.openUri("https://x.com/sylva_es") },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = RoachesSpacing.xs),
+                    ) {
+                        Text("X · @sylva_es")
+                    }
                 }
             }
         }

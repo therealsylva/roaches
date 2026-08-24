@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,8 +23,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Bookmark
+import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -45,11 +50,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.therealsylva.roaches.data.model.MediaItem
+import com.therealsylva.roaches.data.model.SourceIntent
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.ui.RoachesUiState
 import com.therealsylva.roaches.ui.components.ArtworkScrim
 import com.therealsylva.roaches.ui.components.LoadingState
 import com.therealsylva.roaches.ui.components.PrimaryWatchButton
+import com.therealsylva.roaches.ui.components.PosterCard
 import com.therealsylva.roaches.ui.components.SectionTitle
 import com.therealsylva.roaches.ui.components.StateMessage
 import com.therealsylva.roaches.ui.components.formatBytes
@@ -62,22 +69,37 @@ import com.therealsylva.roaches.ui.theme.RoachesSpacing
 fun DetailsScreen(
     state: RoachesUiState,
     saved: Boolean,
+    liked: Boolean,
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onWatch: () -> Unit,
+    onDownloadRequest: () -> Unit,
     onToggleSaved: () -> Unit,
+    onToggleLiked: () -> Unit,
     onSeason: (Int) -> Unit,
     onEpisode: (Int) -> Unit,
     onDismissSources: () -> Unit,
+    onRetrySources: () -> Unit,
     onPlay: (StreamSource) -> Unit,
     onDownload: (StreamSource) -> Unit,
+    onOpenRelated: (MediaItem) -> Unit,
 ) {
     val item = state.details?.item ?: state.detailsSeed
     Box(Modifier.fillMaxSize().background(RoachesColors.Canvas)) {
         if (item != null) {
             LazyColumn(contentPadding = PaddingValues(bottom = RoachesSpacing.xxl)) {
                 item(key = "details-hero") {
-                    DetailsHero(item, state, saved, onBack, onWatch, onToggleSaved)
+                    DetailsHero(
+                        item = item,
+                        state = state,
+                        saved = saved,
+                        liked = liked,
+                        onBack = onBack,
+                        onWatch = onWatch,
+                        onDownload = onDownloadRequest,
+                        onToggleSaved = onToggleSaved,
+                        onToggleLiked = onToggleLiked,
+                    )
                 }
                 when {
                     state.detailsLoading -> item { LoadingState("Loading title details") }
@@ -134,6 +156,29 @@ fun DetailsScreen(
                                 )
                             }
                         }
+                        if (state.related.isNotEmpty()) {
+                            item {
+                                SectionTitle(
+                                    "You might also like",
+                                    Modifier.padding(
+                                        start = RoachesSpacing.md,
+                                        end = RoachesSpacing.md,
+                                        top = RoachesSpacing.xl,
+                                        bottom = RoachesSpacing.sm,
+                                    ),
+                                )
+                            }
+                            item {
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = RoachesSpacing.md),
+                                    horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
+                                ) {
+                                    items(state.related, key = MediaItem::id) { related ->
+                                        PosterCard(related, { onOpenRelated(related) })
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -159,7 +204,7 @@ fun DetailsScreen(
                     )
                 },
             ) {
-                SourcePicker(state, onWatch, onPlay, onDownload)
+                SourcePicker(state, onRetrySources, onPlay, onDownload)
             }
         }
     }
@@ -170,9 +215,12 @@ private fun DetailsHero(
     item: MediaItem,
     state: RoachesUiState,
     saved: Boolean,
+    liked: Boolean,
     onBack: () -> Unit,
     onWatch: () -> Unit,
+    onDownload: () -> Unit,
     onToggleSaved: () -> Unit,
+    onToggleLiked: () -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val isWide = maxWidth > 700.dp
@@ -190,19 +238,10 @@ private fun DetailsHero(
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(RoachesSpacing.xs),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.Start,
         ) {
             IconButton(onClick = onBack, modifier = Modifier.background(RoachesColors.Scrim, RoachesShapes.Tight)) {
                 Icon(Icons.Rounded.ArrowBack, contentDescription = "Back")
-            }
-            IconButton(
-                onClick = onToggleSaved,
-                modifier = Modifier.background(RoachesColors.Scrim, RoachesShapes.Tight),
-            ) {
-                Icon(
-                    if (saved) Icons.Rounded.Check else Icons.Rounded.Add,
-                    contentDescription = if (saved) "Remove from library" else "Add to library",
-                )
             }
         }
         Column(
@@ -223,14 +262,59 @@ private fun DetailsHero(
                     item.year.takeIf(String::isNotBlank),
                     item.kind.name,
                     state.details?.duration,
+                    state.details?.audioLanguage,
                     item.rating?.let { "IMDb $it" },
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.labelLarge,
                 color = RoachesColors.InkMuted,
             )
             PrimaryWatchButton(onClick = onWatch)
+            Row(horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.xs)) {
+                DetailAction(
+                    icon = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    label = if (liked) "Liked" else "Like",
+                    active = liked,
+                    onClick = onToggleLiked,
+                )
+                DetailAction(
+                    icon = if (saved) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkBorder,
+                    label = if (saved) "Saved" else "Save",
+                    active = saved,
+                    onClick = onToggleSaved,
+                )
+                DetailAction(
+                    icon = Icons.Rounded.Download,
+                    label = "Download",
+                    onClick = onDownload,
+                )
+            }
         }
         }
+    }
+}
+
+@Composable
+private fun DetailAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    active: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier
+            .defaultMinSize(minWidth = 72.dp, minHeight = 56.dp)
+            .clip(RoachesShapes.Tight)
+            .clickable(onClick = onClick)
+            .padding(horizontal = RoachesSpacing.xs, vertical = RoachesSpacing.xs),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (active) RoachesColors.Crawl else RoachesColors.Ink,
+        )
+        Text(label, style = MaterialTheme.typography.labelMedium)
     }
 }
 
@@ -306,14 +390,15 @@ private fun SourcePicker(
     onPlay: (StreamSource) -> Unit,
     onDownload: (StreamSource) -> Unit,
 ) {
+    val downloading = state.sourceIntent == SourceIntent.Download
     Column(Modifier.fillMaxWidth().padding(bottom = RoachesSpacing.xl)) {
         Text(
-            "Choose playback",
+            if (downloading) "Choose download" else "Choose playback",
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
         )
         Text(
-            "Quality and language are shown exactly as the provider reports them.",
+            "Each option shows its audio language when the provider reports it.",
             style = MaterialTheme.typography.bodyMedium,
             color = RoachesColors.InkMuted,
             modifier = Modifier.padding(horizontal = RoachesSpacing.md),
@@ -321,16 +406,16 @@ private fun SourcePicker(
         when {
             state.sourcesLoading -> LoadingState("Finding the best sources")
             state.sourcesError != null -> StateMessage(
-                title = "Playback unavailable",
+                title = if (downloading) "Download unavailable" else "Playback unavailable",
                 message = state.sourcesError,
                 action = "Try again",
                 onAction = onRetry,
             )
-            else -> state.sources.forEach { source ->
+            else -> state.sources.forEachIndexed { index, source ->
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable { onPlay(source) }
+                        .clickable { if (downloading) onDownload(source) else onPlay(source) }
                         .padding(start = RoachesSpacing.md, top = RoachesSpacing.sm, bottom = RoachesSpacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -347,15 +432,31 @@ private fun SourcePicker(
                         Modifier.weight(1f).padding(horizontal = RoachesSpacing.sm),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        Text(source.technicalLabel, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            formatBytes(source.sizeBytes) ?: "Stream",
+                            source.audio?.takeIf(String::isNotBlank) ?: "Language not reported",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            listOfNotNull(
+                                source.qualityLabel,
+                                source.codec?.takeIf(String::isNotBlank),
+                                formatBytes(source.sizeBytes),
+                                "Option ${index + 1}",
+                            ).joinToString(" · "),
                             style = MaterialTheme.typography.labelMedium,
                             color = RoachesColors.InkMuted,
                         )
                     }
-                    IconButton(onClick = { onDownload(source) }) {
-                        Icon(Icons.Rounded.Download, contentDescription = "Download ${source.qualityLabel}")
+                    if (downloading) {
+                        Icon(
+                            Icons.Rounded.Download,
+                            contentDescription = "Download ${source.qualityLabel}",
+                            modifier = Modifier.padding(RoachesSpacing.md),
+                        )
+                    } else {
+                        IconButton(onClick = { onDownload(source) }) {
+                            Icon(Icons.Rounded.Download, contentDescription = "Download ${source.qualityLabel}")
+                        }
                     }
                 }
                 HorizontalDivider(color = RoachesColors.SurfaceQuiet)

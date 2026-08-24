@@ -8,9 +8,11 @@ import com.therealsylva.roaches.data.model.AppSettings
 import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.DownloadEntry
 import com.therealsylva.roaches.data.model.DownloadState
+import com.therealsylva.roaches.data.model.LocalMediaEntry
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
 import com.therealsylva.roaches.data.model.PlaybackQuality
+import com.therealsylva.roaches.data.model.PreferredAudio
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.WatchEntry
 import com.therealsylva.roaches.data.remote.ClientIdentity
@@ -41,7 +43,9 @@ class LocalStore(context: Context) {
     fun settings(): AppSettings = AppSettings(
         contentRegion = preferences.enumValue("content_region", ContentRegion.GlobalEnglish),
         playbackQuality = preferences.enumValue("playback_quality", PlaybackQuality.Auto),
+        preferredAudio = preferences.enumValue("preferred_audio", PreferredAudio.English),
         wifiOnlyDownloads = preferences.getBoolean("wifi_only_downloads", true),
+        darkTheme = preferences.getBoolean("dark_theme", true),
     )
 
     fun setContentRegion(region: ContentRegion) {
@@ -52,8 +56,16 @@ class LocalStore(context: Context) {
         preferences.edit().putString("playback_quality", quality.name).apply()
     }
 
+    fun setPreferredAudio(audio: PreferredAudio) {
+        preferences.edit().putString("preferred_audio", audio.name).apply()
+    }
+
     fun setWifiOnlyDownloads(enabled: Boolean) {
         preferences.edit().putBoolean("wifi_only_downloads", enabled).apply()
+    }
+
+    fun setDarkTheme(enabled: Boolean) {
+        preferences.edit().putBoolean("dark_theme", enabled).apply()
     }
 
     fun watchlist(): List<MediaItem> = readArray("watchlist").objects().mapNotNull(::mediaFromJson)
@@ -67,6 +79,37 @@ class LocalStore(context: Context) {
         if (nowSaved) current.add(0, item) else current.removeAt(existing)
         writeArray("watchlist", current.map(::mediaToJson))
         return nowSaved
+    }
+
+    fun liked(): List<MediaItem> = readArray("liked").objects().mapNotNull(::mediaFromJson)
+
+    fun toggleLiked(item: MediaItem): Boolean {
+        val current = liked().toMutableList()
+        val existing = current.indexOfFirst { it.id == item.id }
+        val nowLiked = existing < 0
+        if (nowLiked) current.add(0, item) else current.removeAt(existing)
+        writeArray("liked", current.map(::mediaToJson))
+        return nowLiked
+    }
+
+    fun localMedia(): List<LocalMediaEntry> = readArray("local_media").objects()
+        .mapNotNull(::localMediaFromJson)
+        .sortedByDescending(LocalMediaEntry::addedAt)
+
+    fun addLocalMedia(uri: String, title: String): LocalMediaEntry {
+        localMedia().firstOrNull { it.uri == uri }?.let { return it }
+        val entry = LocalMediaEntry(
+            id = UUID.randomUUID().toString(),
+            title = title.trim().ifBlank { "Local video" },
+            uri = uri,
+            addedAt = System.currentTimeMillis(),
+        )
+        writeArray("local_media", listOf(localMediaToJson(entry)) + localMedia().map(::localMediaToJson))
+        return entry
+    }
+
+    fun removeLocalMedia(entry: LocalMediaEntry) {
+        writeArray("local_media", localMedia().filterNot { it.id == entry.id }.map(::localMediaToJson))
     }
 
     fun history(): List<WatchEntry> = readArray("history").objects()
@@ -257,6 +300,23 @@ private fun downloadFromJson(json: JSONObject): DownloadEntry? {
     val media = json.optJSONObject("media")?.let(::mediaFromJson) ?: return null
     val source = json.optJSONObject("source")?.let(::streamFromJson) ?: return null
     return DownloadEntry(json.optLong("id"), media, source, json.optLong("created"))
+}
+
+private fun localMediaToJson(entry: LocalMediaEntry) = JSONObject()
+    .put("id", entry.id)
+    .put("title", entry.title)
+    .put("uri", entry.uri)
+    .put("added", entry.addedAt)
+
+private fun localMediaFromJson(json: JSONObject): LocalMediaEntry? {
+    val id = json.optString("id").takeIf(String::isNotBlank) ?: return null
+    val uri = json.optString("uri").takeIf(String::isNotBlank) ?: return null
+    return LocalMediaEntry(
+        id = id,
+        title = json.optString("title", "Local video"),
+        uri = uri,
+        addedAt = json.optLong("added"),
+    )
 }
 
 private fun JSONObject.nullableString(key: String): String? = opt(key)

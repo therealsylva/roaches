@@ -1,6 +1,7 @@
 package com.therealsylva.roaches.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -39,14 +40,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.therealsylva.roaches.R
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.ui.theme.RoachesColors
 import com.therealsylva.roaches.ui.theme.RoachesShapes
@@ -54,20 +55,12 @@ import com.therealsylva.roaches.ui.theme.RoachesSpacing
 
 @Composable
 fun RoachesWordmark(modifier: Modifier = Modifier) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(
-            text = "ROACHES",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Black,
-            letterSpacing = 2.2.sp,
-        )
-        Box(
-            Modifier
-                .width(22.dp)
-                .height(2.dp)
-                .background(RoachesColors.Crawl),
-        )
-    }
+    Image(
+        painter = painterResource(R.drawable.roaches_mark),
+        contentDescription = "Roaches",
+        contentScale = ContentScale.Crop,
+        modifier = modifier.size(44.dp).clip(RoachesShapes.Tight),
+    )
 }
 
 @Composable

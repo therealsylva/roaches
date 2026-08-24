@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -36,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.therealsylva.roaches.data.model.DownloadEntry
 import com.therealsylva.roaches.data.model.DownloadState
-import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.ui.components.StateMessage
 import com.therealsylva.roaches.ui.components.formatBytes
 import com.therealsylva.roaches.ui.theme.RoachesColors
@@ -49,7 +49,7 @@ fun DownloadsScreen(
     downloads: List<DownloadEntry>,
     onRefresh: () -> Unit,
     onRemove: (DownloadEntry) -> Unit,
-    onOpen: (MediaItem) -> Unit,
+    onPlay: (DownloadEntry) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(Unit) {
@@ -81,18 +81,19 @@ fun DownloadsScreen(
             }
         } else {
             items(downloads, key = { it.downloadId }) { entry ->
-                DownloadRow(entry, { onOpen(entry.media) }, { onRemove(entry) })
+                DownloadRow(entry, { onPlay(entry) }, { onRemove(entry) })
             }
         }
     }
 }
 
 @Composable
-private fun DownloadRow(entry: DownloadEntry, onOpen: () -> Unit, onRemove: () -> Unit) {
+private fun DownloadRow(entry: DownloadEntry, onPlay: () -> Unit, onRemove: () -> Unit) {
+    val playable = entry.state == DownloadState.Complete && !entry.localUri.isNullOrBlank()
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpen)
+            .clickable(enabled = playable, onClick = onPlay)
             .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.md),
@@ -139,6 +140,11 @@ private fun DownloadRow(entry: DownloadEntry, onOpen: () -> Unit, onRemove: () -
                 style = MaterialTheme.typography.labelMedium,
                 color = if (entry.state == DownloadState.Failed) RoachesColors.Error else RoachesColors.InkMuted,
             )
+        }
+        if (playable) {
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Rounded.PlayArrow, contentDescription = "Play download")
+            }
         }
         IconButton(onClick = onRemove) {
             Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove download")
