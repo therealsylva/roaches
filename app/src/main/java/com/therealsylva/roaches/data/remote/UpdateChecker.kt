@@ -12,52 +12,90 @@ class UpdateChecker(
     private val client: OkHttpClient = OkHttpClient(),
 ) {
     suspend fun check(): ReleaseUpdate = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(LATEST_RELEASE_URL)
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "Roaches/${BuildConfig.VERSION_NAME}")
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                if (response.code == 404) error("No Roaches release has been published yet.")
-                error("Update check failed with status ${response.code}.")
+        var lastStatus = 404
+        for (endpoint in LATEST_RELEASE_URLS) {
+            val request = githubRequest(endpoint)
+            client.newCall(request).execute().use { response ->
+                lastStatus = response.code
+                if (response.code == 404) return@use
+                if (!response.isSuccessful) error("Update check failed with status ${response.code}.")
+
+                val json = JSONObject(response.body?.string().orEmpty())
+                val version = json.optString("tag_name").trim().removePrefix("v")
+                if (version.isBlank()) error("The latest release has no version number.")
+                val assets = json.optJSONArray("assets")
+                val apkAsset = buildList {
+                    if (assets != null) repeat(assets.length()) { index ->
+                        val asset = assets.optJSONObject(index) ?: return@repeat
+                        if (asset.optString("name").endsWith(".apk", ignoreCase = true) &&
+                            asset.optString("browser_download_url").isNotBlank()
+                        ) {
+                            add(asset)
+                        }
+                    }
+                }.firstOrNull()
+                val apkUrl = apkAsset?.optString("browser_download_url")?.takeIf(String::isNotBlank)
+                val apkName = apkAsset?.optString("name").orEmpty()
+                val digest = normalizeReleaseDigest(apkAsset?.optString("digest"))
+                    ?: assets?.let { releaseAssets ->
+                        buildList {
+                            repeat(releaseAssets.length()) { index ->
+                                val asset = releaseAssets.optJSONObject(index) ?: return@repeat
+                                if (asset.optString("name").equals("$apkName.sha256", ignoreCase = true)) {
+                                    add(asset.optString("browser_download_url"))
+                                }
+                            }
+                        }.firstOrNull(String::isNotBlank)?.let(::readChecksum)
+                    }
+                val releaseUrl = json.optString("html_url").takeIf(String::isNotBlank) ?: RELEASES_URL
+                return@withContext ReleaseUpdate(
+                    versionName = version,
+                    releaseUrl = releaseUrl,
+                    apkUrl = apkUrl,
+                    sha256 = digest,
+                    available = isNewerVersion(version, BuildConfig.VERSION_NAME.removeSuffix("-dev")),
+                )
             }
-            val json = JSONObject(response.body?.string().orEmpty())
-            val version = json.optString("tag_name").trim().removePrefix("v")
-            if (version.isBlank()) error("The latest release has no version number.")
-            val assets = json.optJSONArray("assets")
-            val apkUrl = buildList {
-                if (assets != null) repeat(assets.length()) { index ->
-                    val asset = assets.optJSONObject(index) ?: return@repeat
-                    val name = asset.optString("name")
-                    val url = asset.optString("browser_download_url")
-                    if (name.endsWith(".apk", ignoreCase = true) && url.isNotBlank()) add(url)
-                }
-            }.firstOrNull()
-            val releaseUrl = json.optString("html_url").takeIf(String::isNotBlank) ?: RELEASES_URL
-            ReleaseUpdate(
-                versionName = version,
-                releaseUrl = releaseUrl,
-                apkUrl = apkUrl,
-                available = isNewer(version, BuildConfig.VERSION_NAME.removeSuffix("-dev")),
-            )
         }
+        if (lastStatus == 404) error("No Roaches release has been published yet.")
+        error("Update check failed with status $lastStatus.")
     }
 
-    private fun isNewer(remote: String, current: String): Boolean {
-        val remoteParts = remote.split('.', '-', '_').map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
-        val currentParts = current.split('.', '-', '_').map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
-        repeat(maxOf(remoteParts.size, currentParts.size)) { index ->
-            val left = remoteParts.getOrElse(index) { 0 }
-            val right = currentParts.getOrElse(index) { 0 }
-            if (left != right) return left > right
+    private fun githubRequest(url: String): Request = Request.Builder()
+        .url(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "Roaches/${BuildConfig.VERSION_NAME}")
+        .build()
+
+    private fun readChecksum(url: String): String? = runCatching {
+        client.newCall(githubRequest(url)).execute().use { response ->
+            if (!response.isSuccessful) return@use null
+            normalizeReleaseDigest(response.body?.string()?.trim()?.substringBefore(' '))
         }
-        return false
-    }
+    }.getOrNull()
 
     companion object {
         const val REPOSITORY_URL = "https://github.com/therealsylva/roaches"
         const val RELEASES_URL = "$REPOSITORY_URL/releases"
-        private const val LATEST_RELEASE_URL = "https://api.github.com/repos/therealsylva/roaches/releases/latest"
+        private val LATEST_RELEASE_URLS = listOf(
+            "https://api.github.com/repos/therealsylva/roaches/releases/latest",
+            "https://api.github.com/repos/therealsylva/movieboxxed/releases/latest",
+        )
     }
+}
+
+internal fun normalizeReleaseDigest(value: String?): String? {
+    val digest = value.orEmpty().trim().removePrefix("sha256:").lowercase()
+    return digest.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
+}
+
+internal fun isNewerVersion(remote: String, current: String): Boolean {
+    val remoteParts = remote.split('.', '-', '_').map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
+    val currentParts = current.split('.', '-', '_').map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
+    repeat(maxOf(remoteParts.size, currentParts.size)) { index ->
+        val left = remoteParts.getOrElse(index) { 0 }
+        val right = currentParts.getOrElse(index) { 0 }
+        if (left != right) return left > right
+    }
+    return false
 }

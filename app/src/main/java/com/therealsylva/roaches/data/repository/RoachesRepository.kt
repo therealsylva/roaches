@@ -564,9 +564,11 @@ internal fun parseSearchResults(
             RankedMedia(item, value.variantPenalty(preferredAudio), index)
         }
     }.sortedWith(compareBy<RankedMedia>(RankedMedia::penalty).thenBy(RankedMedia::index))
-        .distinctBy { ranked ->
-            with(ranked.item) { "${title.lowercase(Locale.US)}-$year-$kind" }
-        }
+        // MovieBox may return one row per season while reusing the same subject ID.
+        // Compose requires stable unique item keys, and the subject page already owns
+        // season selection, so expose only the provider's best row for each subject.
+        .distinctBy { ranked -> ranked.item.id }
+        .distinctBy { ranked -> ranked.item.canonicalSearchKey() }
         .sortedWith(
             compareBy<RankedMedia> { it.item.searchRelevance(query) }
                 .thenBy(RankedMedia::penalty)
@@ -856,7 +858,7 @@ private val MATURE_QUERY_INTENT_MARKER = Regex(
         "download|full)\\b",
 )
 private val MATURE_RATING_MARKER = Regex(
-    "(?i)(?:\\b(?:NC-17|TV-MA|R18|Adults?|X|XXX)\\b|18\\s*\\+)",
+    "(?i)(?:\\b(?:NC-17|R18|Adults?|X|XXX)\\b|18\\s*\\+)",
 )
 private val QUERY_WORD_MARKER = Regex("[\\p{L}\\p{N}]+")
 private val UK_MARKER = Regex("(?i)\\b(united kingdom|british|britain|england|english)\\b")

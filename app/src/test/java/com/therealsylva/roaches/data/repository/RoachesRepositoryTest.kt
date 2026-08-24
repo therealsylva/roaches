@@ -320,7 +320,75 @@ class RoachesRepositoryTest {
             ContentRegion.GlobalEnglish,
         )
 
-        assertThat(results.map(MediaItem::id)).containsExactly("clean")
+        assertThat(results.map(MediaItem::id)).containsExactly("adult-rating", "clean").inOrder()
+    }
+
+    @Test
+    fun searchCollapsesSeasonRowsThatReuseAProviderSubjectId() {
+        val payload = JSONObject(
+            """
+            {
+              "items": [
+                {
+                  "subjectId":"castlevania",
+                  "title":"Castlevania S4",
+                  "subjectType":2,
+                  "language":"English",
+                  "contentRating":"TV-MA",
+                  "season":4
+                },
+                {
+                  "subjectId":"castlevania",
+                  "title":"Castlevania S3",
+                  "subjectType":2,
+                  "language":"English",
+                  "contentRating":"TV-MA",
+                  "season":3
+                },
+                {
+                  "subjectId":"old-movie",
+                  "title":"Castlevania",
+                  "subjectType":1,
+                  "releaseDate":"2009-01-01"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val results = parseSearchResults(payload, "Castlevania")
+
+        assertThat(results.map(MediaItem::id)).containsExactly("old-movie", "castlevania").inOrder()
+        assertThat(results.count { it.id == "castlevania" }).isEqualTo(1)
+    }
+
+    @Test
+    fun mainstreamMatureRatingsAreNotClassifiedAsExplicitContent() {
+        val payload = JSONObject(
+            """
+            {
+              "items": [
+                {
+                  "subjectId":"castlevania",
+                  "title":"Castlevania",
+                  "subjectType":2,
+                  "genre":"Animation, Action",
+                  "contentRating":"TV-MA"
+                },
+                {
+                  "subjectId":"explicit",
+                  "title":"Explicit listing",
+                  "subjectType":1,
+                  "genre":"Adult"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val results = parseSearchResults(payload, "Castlevania")
+
+        assertThat(results.map(MediaItem::id)).containsExactly("castlevania")
     }
 
     @Test
