@@ -1,7 +1,12 @@
 package com.therealsylva.roaches.data.remote
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -11,41 +16,46 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLException
 
 internal class MovieBoxApi(
     identity: ClientIdentity,
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .callTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build(),
 ) {
     companion object {
         private val HOSTS = listOf(
+            "https://api.aoneroom.com",
+            "https://api3.aoneroom.com",
             "https://api6.aoneroom.com",
-            "https://api5.aoneroom.com",
             "https://api4.aoneroom.com",
             "https://api4sg.aoneroom.com",
-            "https://api3.aoneroom.com",
-            "https://api6sg.aoneroom.com",
-            "https://api.inmoviebox.com",
+            "https://api5.aoneroom.com",
         )
-        private val RETRYABLE = setOf(403, 406, 407, 429, 500, 502, 503, 504)
+        private val AUTH_FAILURES = setOf(401, 441)
+        private val RETRYABLE = setOf(401, 403, 406, 407, 429, 441, 500, 502, 503, 504)
         private val JSON = "application/json".toMediaType()
+        private const val SESSION_PATH = "/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version="
     }
 
     private val signer = RequestSigner(identity)
     private val token = AtomicReference<String?>(null)
     private val activeHost = AtomicInteger(0)
+    private val sessionMutex = Mutex()
 
     suspend fun initialize() {
-        requestAcrossHosts("GET", "/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version=", null)
+        ensureSession()
     }
 
     suspend fun home(page: Int = 1): Any = request(
@@ -120,18 +130,53 @@ internal class MovieBoxApi(
     )
 
     private suspend fun request(method: String, path: String, body: String? = null): Any {
-        if (token.get() == null && !path.contains("tab-operating")) {
-            runCatching { initialize() }
+        if (!requiresSession(path)) return requestAcrossHosts(method, path, body)
+
+        ensureSession()
+        return try {
+            requestAcrossHosts(method, path, body)
+        } catch (failure: ProviderUnavailableException) {
+            if (failure.statuses.none(AUTH_FAILURES::contains)) throw failure
+            token.set(null)
+            ensureSession()
+            requestAcrossHosts(method, path, body)
         }
-        return requestAcrossHosts(method, path, body)
     }
 
-    private suspend fun requestAcrossHosts(method: String, path: String, body: String?): Any =
+    private suspend fun ensureSession() {
+        if (token.get() != null) return
+        sessionMutex.withLock {
+            if (token.get() != null) return
+            requestAcrossHosts("GET", SESSION_PATH, null, requireSessionToken = true)
+            if (token.get().isNullOrBlank()) {
+                throw ProviderUnavailableException(
+                    statuses = emptySet(),
+                    failureKinds = setOf(FailureKind.Session),
+                    cause = null,
+                )
+            }
+        }
+    }
+
+    private fun requiresSession(path: String): Boolean =
+        !path.contains("tab-operating") && !path.contains("subject-api/list")
+
+    private suspend fun requestAcrossHosts(
+        method: String,
+        path: String,
+        body: String?,
+        requireSessionToken: Boolean = false,
+    ): Any =
         withContext(Dispatchers.IO) {
             val start = activeHost.get()
             var lastFailure: Throwable? = null
+            val statuses = linkedSetOf<Int>()
+            val failureKinds = linkedSetOf<FailureKind>()
+            var nextDelayMs = 0L
             repeat(HOSTS.size) { offset ->
-                if (offset > 0) delay(80)
+                currentCoroutineContext().ensureActive()
+                if (nextDelayMs > 0) delay(nextDelayMs)
+                nextDelayMs = (50L shl offset.coerceAtMost(3)).coerceAtMost(400L)
                 val index = (start + offset) % HOSTS.size
                 val url = (HOSTS[index] + path).toHttpUrlOrThrow()
                 val headers = signer.headers(method, url, body, token.get())
@@ -143,11 +188,28 @@ internal class MovieBoxApi(
                 try {
                     client.newCall(request).execute().use { response ->
                         absorbToken(response.header("x-user"))
+                        if (requireSessionToken && token.get().isNullOrBlank() && response.isSuccessful) {
+                            failureKinds += FailureKind.Session
+                            lastFailure = IOException("Provider response did not establish a session")
+                            return@use
+                        }
                         if (response.code in RETRYABLE) {
+                            statuses += response.code
+                            failureKinds += when (response.code) {
+                                429 -> FailureKind.RateLimited
+                                in AUTH_FAILURES -> FailureKind.Session
+                                403, 406, 407 -> FailureKind.Access
+                                else -> FailureKind.Server
+                            }
+                            if (response.code == 429) {
+                                nextDelayMs = response.retryAfterMillis() ?: 800L
+                            }
                             lastFailure = IOException("Provider host returned ${response.code}")
                             return@use
                         }
                         if (!response.isSuccessful) {
+                            statuses += response.code
+                            failureKinds += FailureKind.Access
                             lastFailure = IOException("Provider request failed with ${response.code}")
                             return@use
                         }
@@ -156,11 +218,23 @@ internal class MovieBoxApi(
                         activeHost.set(index)
                         return@withContext unwrapData(parsed)
                     }
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (failure: UnknownHostException) {
+                    failureKinds += FailureKind.Dns
+                    lastFailure = failure
+                } catch (failure: SSLException) {
+                    failureKinds += FailureKind.Tls
+                    lastFailure = failure
+                } catch (failure: SocketTimeoutException) {
+                    failureKinds += FailureKind.Timeout
+                    lastFailure = failure
                 } catch (failure: Throwable) {
+                    failureKinds += FailureKind.Network
                     lastFailure = failure
                 }
             }
-            throw IOException("Provider is temporarily unreachable", lastFailure)
+            throw ProviderUnavailableException(statuses, failureKinds, lastFailure)
         }
 
     private fun absorbToken(rawHeader: String?) {
@@ -186,5 +260,29 @@ internal class MovieBoxApi(
     private fun encode(value: String): String =
         URLEncoder.encode(value, StandardCharsets.UTF_8.name())
 }
+
+private enum class FailureKind { Access, Dns, Network, RateLimited, Server, Session, Timeout, Tls }
+
+private class ProviderUnavailableException(
+    val statuses: Set<Int>,
+    failureKinds: Set<FailureKind>,
+    cause: Throwable?,
+) : IOException(providerFailureMessage(statuses, failureKinds), cause)
+
+private fun providerFailureMessage(statuses: Set<Int>, kinds: Set<FailureKind>): String = when {
+    FailureKind.RateLimited in kinds || 429 in statuses -> "Provider is busy. Try again in a moment."
+    FailureKind.Session in kinds -> "Provider session could not be established."
+    FailureKind.Dns in kinds -> "Provider addresses could not be resolved. Check your connection or Private DNS."
+    FailureKind.Tls in kinds -> "Secure connection to the provider failed."
+    FailureKind.Timeout in kinds -> "Provider connection timed out. Try again."
+    FailureKind.Access in kinds -> "Provider rejected this network route."
+    else -> "Provider connection failed. Try again."
+}
+
+private fun okhttp3.Response.retryAfterMillis(): Long? = header("Retry-After")
+    ?.trim()
+    ?.toLongOrNull()
+    ?.coerceIn(1L, 3L)
+    ?.times(1_000L)
 
 private fun String.toHttpUrlOrThrow() = toHttpUrl()
