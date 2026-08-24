@@ -348,6 +348,7 @@ class RoachesRepositoryTest {
         assertThat(scopedPages).containsExactly(1)
         assertThat(genericCalls).isEqualTo(0)
         assertThat(rows.map { it.getString("resourceId") }).containsExactly("target")
+        Unit
     }
 
     @Test
@@ -381,6 +382,7 @@ class RoachesRepositoryTest {
 
         assertThat(genericRequests).containsExactly(0 to 1, 720 to 2).inOrder()
         assertThat(rows.map { it.getString("resourceId") }).containsExactly("fallback")
+        Unit
     }
 
     @Test
