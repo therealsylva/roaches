@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -25,6 +26,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -69,88 +71,92 @@ fun RoachesApp(
     }
 
     RoachesTheme(darkTheme = state.settings.darkTheme) {
-
-    BackHandler(enabled = state.screen != AppScreen.Browse) {
-        viewModel.goBack()
-    }
-
-    LaunchedEffect(state.notice) {
-        if (state.notice != null) {
-            delay(2_600)
-            viewModel.dismissNotice()
+        BackHandler(enabled = state.screen != AppScreen.Browse) {
+            viewModel.goBack()
         }
-    }
 
-    Box(Modifier.fillMaxSize().background(RoachesColors.Canvas)) {
-        when (state.screen) {
-            AppScreen.Player -> RoachesTheme(darkTheme = true) {
-                PlayerScreen(
-                    media = state.playerMedia,
-                    source = state.playerSource,
-                    captionsLoading = state.captionsLoading,
-                    resumePositionMs = state.history.firstOrNull { it.media.id == state.playerMedia?.id }?.positionMs ?: 0L,
-                    onBack = { viewModel.goBack() },
-                    onProgress = viewModel::recordProgress,
-                    onPlayerMode = onPlayerMode,
-                    isInPictureInPicture = isInPictureInPicture,
-                )
+        LaunchedEffect(state.notice) {
+            if (state.notice != null) {
+                delay(2_600)
+                viewModel.dismissNotice()
             }
-            AppScreen.Category -> CategoryScreen(
-                category = state.category,
-                results = state.categoryResults,
-                loading = state.categoryLoading,
-                error = state.categoryError,
-                onBack = { viewModel.goBack() },
-                onRetry = viewModel::retryCategory,
-                onOpen = viewModel::openDetails,
-            )
-            AppScreen.Details -> DetailsScreen(
-                state = state,
-                saved = viewModel.isSaved(state.details?.item ?: state.detailsSeed),
-                liked = viewModel.isLiked(state.details?.item ?: state.detailsSeed),
-                onBack = { viewModel.goBack() },
-                onRetry = viewModel::retryDetails,
-                onWatch = { viewModel.requestSources(SourceIntent.Playback) },
-                onDownloadRequest = { viewModel.requestSources(SourceIntent.Download) },
-                onToggleSaved = viewModel::toggleSaved,
-                onToggleLiked = viewModel::toggleLiked,
-                onSeason = viewModel::selectSeason,
-                onEpisode = viewModel::selectEpisode,
-                onDismissSources = viewModel::dismissSourcePicker,
-                onRetrySources = viewModel::retrySources,
-                onPlay = viewModel::play,
-                onDownload = viewModel::download,
-                onOpenRelated = viewModel::openDetails,
-            )
-            AppScreen.Settings -> SettingsScreen(
-                settings = state.settings,
-                historyCount = state.history.size,
-                updateLoading = state.updateLoading,
-                updateMessage = state.updateMessage,
-                updateUrl = state.updateUrl,
-                onBack = { viewModel.goBack() },
-                onRegion = viewModel::setContentRegion,
-                onQuality = viewModel::setPlaybackQuality,
-                onAudio = viewModel::setPreferredAudio,
-                onWifiOnly = viewModel::setWifiOnlyDownloads,
-                onDarkTheme = viewModel::setDarkTheme,
-                onClearHistory = viewModel::clearHistory,
-                onCheckUpdates = viewModel::checkForUpdates,
-            )
-            AppScreen.Browse -> BrowseShell(state, viewModel)
         }
 
-        state.notice?.let { notice ->
-            Snackbar(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = if (state.screen == AppScreen.Browse) 72.dp else 18.dp),
-                containerColor = RoachesColors.Ink,
-                contentColor = RoachesColors.Canvas,
-            ) { Text(notice, style = MaterialTheme.typography.labelLarge) }
+        CompositionLocalProvider(LocalContentColor provides RoachesColors.Ink) {
+            Box(Modifier.fillMaxSize().background(RoachesColors.Canvas)) {
+                when (state.screen) {
+                    AppScreen.Player -> RoachesTheme(darkTheme = true) {
+                        PlayerScreen(
+                            media = state.playerMedia,
+                            source = state.playerSource,
+                            captionsLoading = state.captionsLoading,
+                            resumePositionMs = state.history
+                                .firstOrNull { it.media.id == state.playerMedia?.id }
+                                ?.positionMs
+                                ?: 0L,
+                            onBack = { viewModel.goBack() },
+                            onProgress = viewModel::recordProgress,
+                            onPlayerMode = onPlayerMode,
+                            isInPictureInPicture = isInPictureInPicture,
+                        )
+                    }
+                    AppScreen.Category -> CategoryScreen(
+                        category = state.category,
+                        results = state.categoryResults,
+                        loading = state.categoryLoading,
+                        error = state.categoryError,
+                        onBack = { viewModel.goBack() },
+                        onRetry = viewModel::retryCategory,
+                        onOpen = viewModel::openDetails,
+                    )
+                    AppScreen.Details -> DetailsScreen(
+                        state = state,
+                        saved = viewModel.isSaved(state.details?.item ?: state.detailsSeed),
+                        liked = viewModel.isLiked(state.details?.item ?: state.detailsSeed),
+                        onBack = { viewModel.goBack() },
+                        onRetry = viewModel::retryDetails,
+                        onWatch = { viewModel.requestSources(SourceIntent.Playback) },
+                        onDownloadRequest = { viewModel.requestSources(SourceIntent.Download) },
+                        onToggleSaved = viewModel::toggleSaved,
+                        onToggleLiked = viewModel::toggleLiked,
+                        onSeason = viewModel::selectSeason,
+                        onEpisode = viewModel::selectEpisode,
+                        onDismissSources = viewModel::dismissSourcePicker,
+                        onRetrySources = viewModel::retrySources,
+                        onPlay = viewModel::play,
+                        onDownload = viewModel::download,
+                        onOpenRelated = viewModel::openDetails,
+                    )
+                    AppScreen.Settings -> SettingsScreen(
+                        settings = state.settings,
+                        historyCount = state.history.size,
+                        updateLoading = state.updateLoading,
+                        updateMessage = state.updateMessage,
+                        updateUrl = state.updateUrl,
+                        onBack = { viewModel.goBack() },
+                        onRegion = viewModel::setContentRegion,
+                        onQuality = viewModel::setPlaybackQuality,
+                        onAudio = viewModel::setPreferredAudio,
+                        onWifiOnly = viewModel::setWifiOnlyDownloads,
+                        onDarkTheme = viewModel::setDarkTheme,
+                        onClearHistory = viewModel::clearHistory,
+                        onCheckUpdates = viewModel::checkForUpdates,
+                    )
+                    AppScreen.Browse -> BrowseShell(state, viewModel)
+                }
+
+                state.notice?.let { notice ->
+                    Snackbar(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(bottom = if (state.screen == AppScreen.Browse) 72.dp else 18.dp),
+                        containerColor = RoachesColors.Ink,
+                        contentColor = RoachesColors.Canvas,
+                    ) { Text(notice, style = MaterialTheme.typography.labelLarge) }
+                }
+            }
         }
-    }
     }
 }
 

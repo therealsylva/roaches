@@ -44,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -391,6 +392,7 @@ private fun SourcePicker(
     onDownload: (StreamSource) -> Unit,
 ) {
     val downloading = state.sourceIntent == SourceIntent.Download
+    val media = state.details?.item ?: state.detailsSeed
     Column(Modifier.fillMaxWidth().padding(bottom = RoachesSpacing.xl)) {
         Text(
             if (downloading) "Choose download" else "Choose playback",
@@ -419,15 +421,17 @@ private fun SourcePicker(
                         .padding(start = RoachesSpacing.md, top = RoachesSpacing.sm, bottom = RoachesSpacing.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(
-                        Modifier
-                            .size(46.dp)
+                    AsyncImage(
+                        model = media?.posterUrl ?: media?.backdropUrl,
+                        contentDescription = media?.title?.let { "$it thumbnail" },
+                        contentScale = ContentScale.Crop,
+                        placeholder = ColorPainter(RoachesColors.SurfaceQuiet),
+                        error = ColorPainter(RoachesColors.SurfaceQuiet),
+                        modifier = Modifier
+                            .size(width = 52.dp, height = 72.dp)
                             .clip(RoachesShapes.Tight)
                             .background(RoachesColors.SurfaceQuiet),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(source.qualityLabel, style = MaterialTheme.typography.labelLarge)
-                    }
+                    )
                     Column(
                         Modifier.weight(1f).padding(horizontal = RoachesSpacing.sm),
                         verticalArrangement = Arrangement.spacedBy(2.dp),

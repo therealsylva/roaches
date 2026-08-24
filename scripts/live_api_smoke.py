@@ -124,18 +124,33 @@ def main() -> int:
         {"keyword": "Dune", "page": 1, "perPage": 20, "subjectType": "All", "tabId": "All"},
         token,
     )
-    subjects = [
-        item
-        for group in search.get("results", [])
-        for item in group.get("subjects", [])
-    ]
+    primary = next(
+        (
+            group
+            for group in search.get("results", [])
+            if group.get("topicType", "SUBJECT").upper() == "SUBJECT"
+            and not group.get("moreTabId")
+            and group.get("subjects")
+        ),
+        None,
+    )
+    if primary is None:
+        raise RuntimeError("live search returned no primary title group")
+    subjects = primary["subjects"]
     dune = next(
         (
             item
             for item in subjects
-            if item.get("subjectId") and "dune" in item.get("title", "").lower()
+            if item.get("subjectId") and item.get("title", "").lower() == "dune"
         ),
-        None,
+        next(
+            (
+                item
+                for item in subjects
+                if item.get("subjectId") and "dune" in item.get("title", "").lower()
+            ),
+            None,
+        ),
     )
     if dune is None:
         raise RuntimeError("live search returned no Dune title")
@@ -162,8 +177,37 @@ def main() -> int:
     streams = resources.get("list", resources if isinstance(resources, list) else [])
     if not details.get("title") or not any(item.get("resourceLink") for item in streams):
         raise RuntimeError("details or playable resources missing")
+
+    catalogue, token = request(
+        "POST",
+        "/wefeed-mobile-bff/subject-api/list",
+        {
+            "tabId": 2,
+            "page": 1,
+            "perPage": 20,
+            "classify": "All",
+            "country": "United States",
+            "genre": "Action",
+            "sort": "Hottest",
+            "year": "All",
+        },
+        token,
+    )
+    clean_action = [
+        item
+        for item in catalogue.get("items", [])
+        if int(item.get("subjectType", 0)) in (1, 2)
+        and "action" in item.get("genre", "").lower()
+        and "india" not in item.get("countryName", "").lower()
+        and "[hindi]" not in item.get("title", "").lower()
+    ]
+    if not clean_action:
+        raise RuntimeError("structured Action catalogue returned no clean title")
     qualities = sorted({int(item.get("resolution", 0)) for item in streams if int(item.get("resolution", 0)) > 0}, reverse=True)
-    print(f"LIVE_ANDROID_API_OK title={details['title']!r} streams={len(streams)} qualities={qualities}")
+    print(
+        f"LIVE_ANDROID_API_OK title={details['title']!r} streams={len(streams)} "
+        f"qualities={qualities} action={clean_action[0]['title']!r}"
+    )
     return 0
 
 

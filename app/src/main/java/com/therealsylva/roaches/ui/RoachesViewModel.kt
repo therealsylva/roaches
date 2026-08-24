@@ -182,7 +182,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch {
             runCatching {
-                (repository.search(category.query, 1) + repository.search(category.query, 2))
+                (repository.category(category, 1) + repository.category(category, 2))
                     .distinctBy(MediaItem::id)
             }.onSuccess { results ->
                 mutableState.update {

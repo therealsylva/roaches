@@ -1,11 +1,10 @@
 package com.therealsylva.roaches.data.remote
 
-import android.os.Build
-import android.util.Base64
 import okhttp3.HttpUrl
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.Locale
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -22,32 +21,28 @@ internal class RequestSigner(private val identity: ClientIdentity) {
         private const val BODY_HASH_LIMIT = 102_400
         private const val VERSION_CODE = 50_020_046
         private const val ACCEPT = "application/json"
+        private const val OS_VERSION = "13"
+        private const val BRAND = "Redmi"
+        private const val MODEL = "23078RKD5C"
+        private const val USER_AGENT =
+            "com.community.oneroom/50020046 (Linux; U; Android 13; en_US; " +
+                "23078RKD5C; Build/TQ2A.230405.003; Cronet/135.0.7012.3)"
     }
 
-    val userAgent: String = buildString {
-        append("com.community.oneroom/")
-        append(VERSION_CODE)
-        append(" (Linux; U; Android ")
-        append(Build.VERSION.RELEASE.ifBlank { "13" })
-        append("; ")
-        append("en_US")
-        append("; ")
-        append(Build.MODEL.ifBlank { "Android" })
-        append("; Roaches/0.2)")
-    }
+    val userAgent: String = USER_AGENT
 
-    private val clientInfo = JSONObject()
+    internal val clientInfo = JSONObject()
         .put("package_name", "com.community.oneroom")
         .put("version_name", "3.0.03.0529.03")
         .put("version_code", VERSION_CODE)
         .put("os", "android")
-        .put("os_version", Build.VERSION.RELEASE.ifBlank { "13" })
+        .put("os_version", OS_VERSION)
         .put("install_ch", "ps")
         .put("device_id", identity.installId.replace("-", ""))
         .put("install_store", "ps")
         .put("gaid", identity.sessionId)
-        .put("brand", Build.BRAND.ifBlank { "Android" })
-        .put("model", Build.MODEL.ifBlank { "Android" })
+        .put("brand", BRAND)
+        .put("model", MODEL)
         .put("system_language", "en")
         .put("net", "NETWORK_WIFI")
         .put("region", "US")
@@ -66,13 +61,12 @@ internal class RequestSigner(private val identity: ClientIdentity) {
         val reversedTimestamp = timestampMs.toString().reversed()
         val clientToken = "$timestampMs,${md5Hex(reversedTimestamp.toByteArray())}"
         val canonical = canonical(method, url, body, timestampMs)
-        val key = Base64.decode(padBase64(SECRET), Base64.DEFAULT)
+        val key = Base64.getDecoder().decode(padBase64(SECRET))
         val mac = Mac.getInstance("HmacMD5").apply {
             init(SecretKeySpec(key, "HmacMD5"))
         }
-        val signature = Base64.encodeToString(
+        val signature = Base64.getEncoder().encodeToString(
             mac.doFinal(canonical.toByteArray(StandardCharsets.UTF_8)),
-            Base64.NO_WRAP,
         )
 
         return buildMap {

@@ -2,20 +2,24 @@ package com.therealsylva.roaches.data.model
 
 enum class MediaKind { Movie, Series }
 
-enum class BrowseCategory(val label: String, val query: String) {
-    Anime("Anime", "anime"),
-    Action("Action", "action"),
-    Romance("Romance", "romance"),
-    Comedy("Comedy", "comedy"),
-    Horror("Horror", "horror"),
-    ScienceFiction("Sci-fi", "science fiction"),
-    Thriller("Thriller", "thriller"),
-    Drama("Drama", "drama"),
-    Fantasy("Fantasy", "fantasy"),
-    Animation("Animation", "animation"),
-    Crime("Crime", "crime"),
-    Documentary("Documentary", "documentary"),
-    Family("Family", "family"),
+enum class BrowseCategory(
+    val label: String,
+    val providerGenre: String,
+    val providerCountry: String? = null,
+) {
+    Anime("Anime", "Animation", "Japan"),
+    Action("Action", "Action"),
+    Romance("Romance", "Romance"),
+    Comedy("Comedy", "Comedy"),
+    Horror("Horror", "Horror"),
+    ScienceFiction("Sci-fi", "Sci-Fi"),
+    Thriller("Thriller", "Thriller"),
+    Drama("Drama", "Drama"),
+    Fantasy("Fantasy", "Fantasy"),
+    Animation("Animation", "Animation"),
+    Crime("Crime", "Crime"),
+    Documentary("Documentary", "Documentary"),
+    Family("Family", "Family"),
 }
 
 enum class ContentRegion(val label: String) {
