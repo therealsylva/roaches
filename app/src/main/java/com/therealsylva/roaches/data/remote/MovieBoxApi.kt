@@ -141,7 +141,7 @@ internal class MovieBoxApi(
                     lastFailure = failure
                 }
             }
-            throw IOException("The catalogue is temporarily unreachable", lastFailure)
+            throw IOException("Home is temporarily unreachable", lastFailure)
         }
 
     private fun absorbToken(rawHeader: String?) {

@@ -10,7 +10,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
 import com.therealsylva.roaches.ui.RoachesApp
-import com.therealsylva.roaches.ui.theme.RoachesTheme
 
 class MainActivity : ComponentActivity() {
     private var playerActive = false
@@ -21,12 +20,10 @@ class MainActivity : ComponentActivity() {
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = false
         setContent {
-            RoachesTheme {
-                RoachesApp(
-                    onPlayerMode = ::setPlayerMode,
-                    isInPictureInPicture = { isInPictureInPictureMode },
-                )
-            }
+            RoachesApp(
+                onPlayerMode = ::setPlayerMode,
+                isInPictureInPicture = { isInPictureInPictureMode },
+            )
         }
     }
 

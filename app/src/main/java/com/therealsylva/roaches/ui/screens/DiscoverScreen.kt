@@ -1,5 +1,10 @@
 package com.therealsylva.roaches.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,12 +22,20 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +43,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.therealsylva.roaches.data.model.BrowseCategory
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.ui.RoachesUiState
 import com.therealsylva.roaches.ui.components.ArtworkScrim
@@ -41,31 +55,74 @@ import com.therealsylva.roaches.ui.components.StateMessage
 import com.therealsylva.roaches.ui.theme.RoachesColors
 import com.therealsylva.roaches.ui.theme.RoachesShapes
 import com.therealsylva.roaches.ui.theme.RoachesSpacing
+import kotlinx.coroutines.delay
 
 @Composable
 fun DiscoverScreen(
     state: RoachesUiState,
     onRetry: () -> Unit,
+    onSettings: () -> Unit,
+    onCategory: (BrowseCategory) -> Unit,
     onOpen: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val featured = state.shelves.firstOrNull()?.items?.firstOrNull()
+    val featuredItems = remember(state.shelves) {
+        state.shelves.flatMap { it.items.take(4) }.distinctBy(MediaItem::id).take(10)
+    }
+    var featuredIndex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(featuredItems) {
+        featuredIndex = 0
+        while (featuredItems.size > 1) {
+            delay(7_500)
+            featuredIndex = (featuredIndex + 1) % featuredItems.size
+        }
+    }
     LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = RoachesSpacing.xl)) {
         item(key = "hero") {
-            if (featured != null) {
-                DiscoverHero(featured, onOpen)
+            if (featuredItems.isNotEmpty()) {
+                AnimatedContent(
+                    targetState = featuredItems[featuredIndex.coerceIn(featuredItems.indices)],
+                    transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(180)) },
+                    label = "featured-title",
+                ) { featured ->
+                    DiscoverHero(featured, onSettings, onOpen)
+                }
             } else {
                 Column(Modifier.statusBarsPadding().padding(top = RoachesSpacing.lg)) {
-                    RoachesWordmark(Modifier.padding(horizontal = RoachesSpacing.md))
+                    DiscoverHeader(onSettings, Modifier.padding(horizontal = RoachesSpacing.md))
                     if (state.discoverLoading) {
-                        LoadingState("Opening the catalogue", Modifier.padding(top = 140.dp))
+                        LoadingState("Opening Home", Modifier.padding(top = 140.dp))
                     } else {
                         StateMessage(
                             title = "Nothing to show yet",
-                            message = state.discoverError ?: "The catalogue returned no titles.",
+                            message = state.discoverError ?: "Home returned no titles.",
                             action = "Try again",
                             onAction = onRetry,
                         )
+                    }
+                }
+            }
+        }
+
+        item(key = "genre-heading") {
+            SectionTitle("Browse by genre", Modifier.padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.lg))
+        }
+        item(key = "genre-rail") {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = RoachesSpacing.md),
+                horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.xs),
+            ) {
+                items(BrowseCategory.entries, key = BrowseCategory::name) { category ->
+                    TextButton(
+                        onClick = { onCategory(category) },
+                        shape = RoachesShapes.Tight,
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = RoachesColors.SurfaceQuiet,
+                            contentColor = RoachesColors.Ink,
+                        ),
+                        modifier = Modifier.height(48.dp),
+                    ) {
+                        Text(category.label, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }
@@ -115,7 +172,7 @@ fun DiscoverScreen(
 }
 
 @Composable
-private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
+private fun DiscoverHero(item: MediaItem, onSettings: () -> Unit, onOpen: (MediaItem) -> Unit) {
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -130,11 +187,12 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
             modifier = Modifier.fillMaxSize(),
         )
         ArtworkScrim(Modifier.fillMaxSize(), strong = true)
-        RoachesWordmark(
-            Modifier
-                .align(Alignment.TopStart)
+        DiscoverHeader(
+            onSettings = onSettings,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
                 .statusBarsPadding()
-                .padding(RoachesSpacing.md),
+                .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
         )
         Column(
             modifier = Modifier
@@ -182,6 +240,24 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
                     Icon(Icons.Rounded.ArrowForward, contentDescription = null)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverHeader(onSettings: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RoachesWordmark()
+        IconButton(onClick = onSettings) {
+            Icon(
+                imageVector = Icons.Rounded.Settings,
+                contentDescription = "Settings",
+                tint = RoachesColors.Ink,
+            )
         }
     }
 }

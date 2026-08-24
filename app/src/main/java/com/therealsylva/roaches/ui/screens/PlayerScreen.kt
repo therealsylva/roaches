@@ -1,8 +1,13 @@
 package com.therealsylva.roaches.ui.screens
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.media.AudioManager
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,11 +22,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.Brightness6
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,6 +46,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +77,7 @@ import com.therealsylva.roaches.ui.theme.RoachesColors
 import com.therealsylva.roaches.ui.theme.RoachesShapes
 import com.therealsylva.roaches.ui.theme.RoachesSpacing
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -90,6 +100,8 @@ fun PlayerScreen(
     }
 
     val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+    val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
     LocalConfiguration.current
     val player = remember {
         ExoPlayer.Builder(context).build().apply {
@@ -99,6 +111,9 @@ fun PlayerScreen(
     val mediaSession = remember { MediaSession.Builder(context, player).build() }
     var selectedSubtitle by remember { mutableStateOf<SubtitleTrack?>(null) }
     var showSubtitlePicker by remember { mutableStateOf(false) }
+    var showSpeedPicker by remember { mutableStateOf(false) }
+    var playbackSpeed by remember { mutableFloatStateOf(1f) }
+    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var controlsVisible by remember { mutableStateOf(true) }
     var playing by remember { mutableStateOf(false) }
     var buffering by remember { mutableStateOf(true) }
@@ -107,6 +122,22 @@ fun PlayerScreen(
     var sliderPosition by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    var gestureSide by remember { mutableStateOf(PlayerGesture.Brightness) }
+    var gestureValue by remember { mutableFloatStateOf(0f) }
+    var gestureVisible by remember { mutableStateOf(false) }
+    var brightness by remember {
+        mutableFloatStateOf(
+            activity?.window?.attributes?.screenBrightness?.takeIf { it > 0f } ?: 0.5f,
+        )
+    }
+    val maxVolume = remember(audioManager) {
+        audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC)?.coerceAtLeast(1) ?: 1
+    }
+    var volume by remember(audioManager, maxVolume) {
+        mutableFloatStateOf(
+            (audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0).toFloat() / maxVolume,
+        )
+    }
     val inPip = isInPictureInPicture()
 
     fun loadMedia(subtitle: SubtitleTrack?, preservePosition: Boolean) {
@@ -132,6 +163,7 @@ fun PlayerScreen(
             .build()
         player.setMediaItem(item, currentPosition.coerceAtLeast(0L))
         player.prepare()
+        player.setPlaybackSpeed(playbackSpeed)
         player.playWhenReady = true
     }
 
@@ -183,12 +215,56 @@ fun PlayerScreen(
         }
     }
 
+    LaunchedEffect(gestureVisible, gestureValue) {
+        if (gestureVisible) {
+            delay(900)
+            gestureVisible = false
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { controlsVisible = !controlsVisible })
+            }
+            .pointerInput(activity, audioManager) {
+                detectVerticalDragGestures(
+                    onDragStart = { offset ->
+                        gestureSide = if (offset.x < size.width / 2f) {
+                            PlayerGesture.Brightness
+                        } else {
+                            PlayerGesture.Volume
+                        }
+                        controlsVisible = false
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        val delta = -dragAmount / size.height.coerceAtLeast(1)
+                        when (gestureSide) {
+                            PlayerGesture.Brightness -> {
+                                brightness = (brightness + delta).coerceIn(0.05f, 1f)
+                                activity?.window?.let { window ->
+                                    val attributes = window.attributes
+                                    attributes.screenBrightness = brightness
+                                    window.attributes = attributes
+                                }
+                                gestureValue = brightness
+                            }
+                            PlayerGesture.Volume -> {
+                                volume = (volume + delta).coerceIn(0f, 1f)
+                                audioManager?.setStreamVolume(
+                                    AudioManager.STREAM_MUSIC,
+                                    (volume * maxVolume).roundToInt(),
+                                    0,
+                                )
+                                gestureValue = volume
+                            }
+                        }
+                        gestureVisible = true
+                    },
+                )
             },
     ) {
         AndroidView(
@@ -200,7 +276,10 @@ fun PlayerScreen(
                     this.player = player
                 }
             },
-            update = { it.player = player },
+            update = {
+                it.player = player
+                it.resizeMode = resizeMode
+            },
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -209,6 +288,16 @@ fun PlayerScreen(
                 modifier = Modifier.align(Alignment.Center).size(36.dp),
                 color = RoachesColors.Ink,
                 strokeWidth = 2.dp,
+            )
+        }
+
+        if (gestureVisible && !inPip) {
+            PlayerGestureOverlay(
+                gesture = gestureSide,
+                value = gestureValue,
+                modifier = Modifier
+                    .align(if (gestureSide == PlayerGesture.Brightness) Alignment.CenterStart else Alignment.CenterEnd)
+                    .padding(RoachesSpacing.xl),
             )
         }
 
@@ -222,6 +311,8 @@ fun PlayerScreen(
                 sliderPosition = sliderPosition,
                 captionsLoading = captionsLoading,
                 subtitleLabel = selectedSubtitle?.label,
+                speed = playbackSpeed,
+                resizeLabel = resizeLabel(resizeMode),
                 error = playerError,
                 onBack = onBack,
                 onToggle = { if (player.isPlaying) player.pause() else player.play() },
@@ -239,6 +330,14 @@ fun PlayerScreen(
                     dragging = false
                 },
                 onSubtitles = { showSubtitlePicker = true },
+                onSpeed = { showSpeedPicker = true },
+                onResize = {
+                    resizeMode = when (resizeMode) {
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    }
+                },
             )
         }
     }
@@ -279,6 +378,30 @@ fun PlayerScreen(
             }
         }
     }
+
+
+    if (showSpeedPicker) {
+        ModalBottomSheet(
+            onDismissRequest = { showSpeedPicker = false },
+            containerColor = RoachesColors.Surface,
+            contentColor = RoachesColors.Ink,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = RoachesSpacing.xl)) {
+                Text(
+                    "Playback speed",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(RoachesSpacing.md),
+                )
+                listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { speed ->
+                    SubtitleOption("${formatSpeed(speed)}x", playbackSpeed == speed) {
+                        playbackSpeed = speed
+                        player.setPlaybackSpeed(speed)
+                        showSpeedPicker = false
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -291,6 +414,8 @@ private fun PlayerControls(
     sliderPosition: Float,
     captionsLoading: Boolean,
     subtitleLabel: String?,
+    speed: Float,
+    resizeLabel: String,
     error: String?,
     onBack: () -> Unit,
     onToggle: () -> Unit,
@@ -299,6 +424,8 @@ private fun PlayerControls(
     onSlider: (Float) -> Unit,
     onSliderFinished: () -> Unit,
     onSubtitles: () -> Unit,
+    onSpeed: () -> Unit,
+    onResize: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.52f))) {
         Row(
@@ -323,6 +450,12 @@ private fun PlayerControls(
                     contentDescription = subtitleLabel?.let { "Subtitles: $it" } ?: "Choose subtitles",
                     tint = if (subtitleLabel != null) RoachesColors.Crawl else RoachesColors.Ink,
                 )
+            }
+            TextButton(onClick = onSpeed, modifier = Modifier.height(48.dp)) {
+                Text("${formatSpeed(speed)}x", style = MaterialTheme.typography.labelLarge)
+            }
+            IconButton(onClick = onResize) {
+                Icon(Icons.Rounded.AspectRatio, contentDescription = "Video crop: $resizeLabel")
             }
         }
 
@@ -371,6 +504,35 @@ private fun PlayerControls(
     }
 }
 
+private enum class PlayerGesture { Brightness, Volume }
+
+@Composable
+private fun PlayerGestureOverlay(gesture: PlayerGesture, value: Float, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .background(Color.Black.copy(alpha = 0.78f), RoachesShapes.Tight)
+            .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(RoachesSpacing.xs),
+    ) {
+        Icon(
+            if (gesture == PlayerGesture.Brightness) Icons.Rounded.Brightness6 else Icons.Rounded.VolumeUp,
+            contentDescription = null,
+            tint = Color.White,
+        )
+        Text(
+            if (gesture == PlayerGesture.Brightness) "Brightness" else "Volume",
+            style = MaterialTheme.typography.labelMedium,
+            color = Color.White,
+        )
+        Text(
+            "${(value.coerceIn(0f, 1f) * 100).roundToInt()}%",
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White,
+        )
+    }
+}
+
 @Composable
 private fun PlayerAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(56.dp)) {
@@ -399,6 +561,25 @@ private fun formatTime(valueMs: Long): String {
     val minutes = (seconds % 3_600) / 60
     val remainder = seconds % 60
     return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, remainder) else "%d:%02d".format(minutes, remainder)
+}
+
+private fun formatSpeed(speed: Float): String = if (speed % 1f == 0f) {
+    speed.toInt().toString()
+} else {
+    speed.toString().trimEnd('0').trimEnd('.')
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun resizeLabel(resizeMode: Int): String = when (resizeMode) {
+    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Crop"
+    AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretch"
+    else -> "Fit"
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 private fun subtitleMime(url: String): String = when (url.substringBefore('?').substringAfterLast('.').lowercase()) {

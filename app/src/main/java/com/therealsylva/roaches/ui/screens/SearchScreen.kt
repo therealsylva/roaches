@@ -1,8 +1,6 @@
 package com.therealsylva.roaches.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +14,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -28,7 +25,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -52,6 +48,7 @@ fun SearchScreen(
     error: String?,
     suggestions: List<MediaItem>,
     onQuery: (String) -> Unit,
+    onSubmit: () -> Unit,
     onOpen: (MediaItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -66,7 +63,7 @@ fun SearchScreen(
                 bottom = RoachesSpacing.md,
             ),
         )
-        SearchField(query, onQuery)
+        SearchField(query, onQuery, onSubmit)
 
         when {
             loading && results.isEmpty() -> LoadingState("Searching", Modifier.padding(top = RoachesSpacing.xl))
@@ -74,7 +71,7 @@ fun SearchScreen(
                 title = "Search paused",
                 message = error,
                 action = "Try again",
-                onAction = { onQuery(query) },
+                onAction = onSubmit,
             )
             query.isNotBlank() && results.isEmpty() -> StateMessage(
                 title = "No matches",
@@ -113,7 +110,7 @@ fun SearchScreen(
 }
 
 @Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit) {
+private fun SearchField(query: String, onQuery: (String) -> Unit, onSubmit: () -> Unit) {
     val focusManager = LocalFocusManager.current
     BasicTextField(
         value = query,
@@ -122,7 +119,12 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = RoachesColors.Ink),
         cursorBrush = SolidColor(RoachesColors.Crawl),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+        keyboardActions = KeyboardActions(
+            onSearch = {
+                onSubmit()
+                focusManager.clearFocus()
+            },
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = RoachesSpacing.md)
@@ -132,11 +134,22 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
                 Modifier
                     .fillMaxSize()
                     .background(RoachesColors.SurfaceQuiet, RoachesShapes.Tight)
-                    .padding(start = RoachesSpacing.md),
+                    .padding(end = RoachesSpacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
             ) {
-                Icon(Icons.Rounded.Search, contentDescription = null, tint = RoachesColors.InkMuted)
+                IconButton(
+                    onClick = {
+                        onSubmit()
+                        focusManager.clearFocus()
+                    },
+                ) {
+                    Icon(
+                        Icons.Rounded.Search,
+                        contentDescription = "Run search",
+                        tint = RoachesColors.InkMuted,
+                    )
+                }
                 Box(Modifier.weight(1f)) {
                     if (query.isBlank()) {
                         Text(

@@ -1,0 +1,81 @@
+name: Roaches release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example 0.2.0"
+        required: true
+        default: "0.2.0"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Sign and publish APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ROACHES_KEYSTORE_BASE64: ${{ secrets.ROACHES_KEYSTORE_BASE64 }}
+      ROACHES_STORE_PASSWORD: ${{ secrets.ROACHES_STORE_PASSWORD }}
+      ROACHES_KEY_ALIAS: ${{ secrets.ROACHES_KEY_ALIAS }}
+      ROACHES_KEY_PASSWORD: ${{ secrets.ROACHES_KEY_PASSWORD }}
+      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Require stable signing credentials
+        run: |
+          test -n "$ROACHES_KEYSTORE_BASE64"
+          test -n "$ROACHES_STORE_PASSWORD"
+          test -n "$ROACHES_KEY_ALIAS"
+          test -n "$ROACHES_KEY_PASSWORD"
+          printf '%s' "$ROACHES_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/roaches-release.jks"
+
+      - name: Audit and build signed release
+        run: |
+          python3 scripts/anti_slop.py
+          gradle :app:testDebugUnitTest :app:lintRelease :app:assembleRelease \
+            -PROACHES_STORE_FILE="$RUNNER_TEMP/roaches-release.jks" \
+            -PROACHES_STORE_PASSWORD="$ROACHES_STORE_PASSWORD" \
+            -PROACHES_KEY_ALIAS="$ROACHES_KEY_ALIAS" \
+            -PROACHES_KEY_PASSWORD="$ROACHES_KEY_PASSWORD" \
+            --stacktrace
+
+      - name: Verify and name APK
+        run: |
+          VERSION="${RELEASE_VERSION#v}"
+          mkdir -p artifacts
+          cp app/build/outputs/apk/release/roaches-release.apk "artifacts/Roaches-$VERSION.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "artifacts/Roaches-$VERSION.apk"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$RELEASE_VERSION"
+          case "$TAG" in v*) ;; *) TAG="v$TAG" ;; esac
+          APK="artifacts/Roaches-${RELEASE_VERSION#v}.apk"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" --generate-notes --title "Roaches ${TAG#v}"
+          fi

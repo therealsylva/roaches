@@ -79,7 +79,7 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
                 "net": "NETWORK_WIFI",
                 "region": "US",
                 "timezone": "America/New_York",
-                "sp_code": "40401",
+        "sp_code": "40401",
                 "X-Play-Mode": "2",
             },
             separators=(",", ":"),

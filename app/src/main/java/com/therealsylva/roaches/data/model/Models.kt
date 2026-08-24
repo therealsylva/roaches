@@ -2,6 +2,52 @@ package com.therealsylva.roaches.data.model
 
 enum class MediaKind { Movie, Series }
 
+enum class BrowseCategory(val label: String, val query: String) {
+    Anime("Anime", "anime"),
+    Action("Action", "action"),
+    Romance("Romance", "romance"),
+    Comedy("Comedy", "comedy"),
+    Horror("Horror", "horror"),
+    ScienceFiction("Sci-fi", "science fiction"),
+    Thriller("Thriller", "thriller"),
+    Drama("Drama", "drama"),
+    Fantasy("Fantasy", "fantasy"),
+    Animation("Animation", "animation"),
+    Crime("Crime", "crime"),
+    Documentary("Documentary", "documentary"),
+    Family("Family", "family"),
+}
+
+enum class ContentRegion(val label: String) {
+    GlobalEnglish("Global English"),
+    UnitedKingdom("United Kingdom"),
+    Nigeria("Nigeria"),
+}
+
+enum class PlaybackQuality(val height: Int, val label: String) {
+    Auto(0, "Best available"),
+    FullHd(1080, "Up to 1080p"),
+    Hd(720, "Up to 720p"),
+}
+
+enum class PreferredAudio(val label: String, vararg val matches: String) {
+    English("English", "english", "eng"),
+    Original("Original audio", "original"),
+    French("French", "french", "fra"),
+    Spanish("Spanish", "spanish", "spa"),
+    Arabic("Arabic", "arabic", "ara"),
+    Hindi("Hindi", "hindi", "hin"),
+    Any("Any available"),
+}
+
+data class AppSettings(
+    val contentRegion: ContentRegion = ContentRegion.GlobalEnglish,
+    val playbackQuality: PlaybackQuality = PlaybackQuality.Auto,
+    val preferredAudio: PreferredAudio = PreferredAudio.English,
+    val wifiOnlyDownloads: Boolean = true,
+    val darkTheme: Boolean = true,
+)
+
 data class MediaItem(
     val id: String,
     val title: String,
@@ -39,7 +85,15 @@ data class MediaDetails(
     val director: String? = null,
     val cast: String? = null,
     val country: String? = null,
+    val audioLanguage: String? = null,
     val seasons: List<Season> = emptyList(),
+)
+
+data class LocalMediaEntry(
+    val id: String,
+    val title: String,
+    val uri: String,
+    val addedAt: Long,
 )
 
 data class SubtitleTrack(
@@ -79,6 +133,15 @@ data class WatchEntry(
 }
 
 enum class DownloadState { Queued, Downloading, Complete, Failed, Missing }
+
+enum class SourceIntent { Playback, Download }
+
+data class ReleaseUpdate(
+    val versionName: String,
+    val releaseUrl: String,
+    val apkUrl: String?,
+    val available: Boolean,
+)
 
 data class DownloadEntry(
     val downloadId: Long,
