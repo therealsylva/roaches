@@ -38,5 +38,7 @@ class ModelsTest {
         val settings = AppSettings()
         assertThat(settings.contentRegion).isEqualTo(ContentRegion.GlobalEnglish)
         assertThat(settings.wifiOnlyDownloads).isFalse()
+        assertThat(settings.eggsEnabled).isFalse()
+        assertThat(settings.matureContentUnlocked).isFalse()
     }
 }
