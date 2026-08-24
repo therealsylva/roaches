@@ -210,6 +210,44 @@ def main() -> int:
     if not any(item.get("title", "").lower().startswith("toy story") for item in toy_subjects):
         raise RuntimeError("short-query search returned no Toy Story title")
 
+    spider_man_id = "6026412232966389904"
+    website_search_url = "https://movieboxhd.net/web/searchResult?" + urllib.parse.urlencode(
+        {"keyword": "spiderman brand new day"}
+    )
+    website_request = urllib.request.Request(
+        website_search_url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/135.0 Mobile Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml",
+        },
+    )
+    with urllib.request.urlopen(website_request, timeout=30) as response:
+        website_html = response.read(2_000_001).decode("utf-8", errors="replace")
+    if len(website_html) > 2_000_000 or spider_man_id not in website_html:
+        raise RuntimeError("website fallback search returned no Spider-Man: Brand New Day title")
+
+    spider_man_details, token = request(
+        "GET",
+        f"/wefeed-mobile-bff/subject-api/get?subjectId={spider_man_id}",
+        token=token,
+    )
+    spider_man_resources, token = request(
+        "GET",
+        f"/wefeed-mobile-bff/subject-api/resource?subjectId={spider_man_id}&page=1&perPage=20",
+        token=token,
+    )
+    spider_man_streams = spider_man_resources.get(
+        "list", spider_man_resources if isinstance(spider_man_resources, list) else []
+    )
+    if (
+        spider_man_details.get("title", "").lower() != "spider-man: brand new day"
+        or not any(item.get("resourceLink") for item in spider_man_streams)
+    ):
+        raise RuntimeError("Spider-Man fallback title has no playable mobile resource")
+
     search, token = request(
         "POST",
         "/wefeed-mobile-bff/subject-api/search/v2",
