@@ -207,8 +207,9 @@ class RoachesRepositoryTest {
     @Test
     fun homeResolverFallsBackToLegacyThenCache() = runBlocking {
         val legacy = listOf(Shelf("legacy", "Discover", listOf(media("legacy"))))
+        val cachedBeforeLegacy = listOf(Shelf("popular", "Popular now", listOf(media("older"))))
         val fromLegacy = resolveHome(
-            cached = emptyList(),
+            cached = cachedBeforeLegacy,
             fetchCatalogue = { throw IOException("catalogue down") },
             fetchLegacy = { legacy },
         )
@@ -219,7 +220,7 @@ class RoachesRepositoryTest {
             fetchLegacy = { throw IOException("legacy down") },
         )
 
-        assertThat(fromLegacy).isEqualTo(legacy)
+        assertThat(fromLegacy.map(Shelf::id)).containsExactly("popular", "legacy").inOrder()
         assertThat(fromCache).isEqualTo(cache)
     }
 

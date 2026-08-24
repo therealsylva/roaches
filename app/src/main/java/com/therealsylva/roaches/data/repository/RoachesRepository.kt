@@ -188,11 +188,7 @@ internal suspend fun resolveHome(
     }
 
     if (fresh.isNotEmpty()) {
-        val resolved = (fresh + cached.filter { cachedShelf ->
-            fresh.none { it.id == cachedShelf.id }
-        }).filter { it.items.isNotEmpty() }
-            .distinctBy(Shelf::id)
-            .take(6)
+        val resolved = mergeHome(fresh, cached)
         runCatching { persist(resolved) }
         return resolved
     }
@@ -207,14 +203,22 @@ internal suspend fun resolveHome(
         emptyList()
     }
     if (legacy.isNotEmpty()) {
-        runCatching { persist(legacy) }
-        return legacy
+        val resolved = if (cached.isEmpty()) legacy else mergeHome(cached, legacy)
+        runCatching { persist(resolved) }
+        return resolved
     }
     if (cached.isNotEmpty()) return cached
 
     throw structuredFailure ?: legacyFailure
         ?: IllegalStateException("No Home sections were returned")
 }
+
+private fun mergeHome(primary: List<Shelf>, fallback: List<Shelf>): List<Shelf> =
+    (primary + fallback.filter { fallbackShelf ->
+        primary.none { it.id == fallbackShelf.id }
+    }).filter { it.items.isNotEmpty() }
+        .distinctBy(Shelf::id)
+        .take(6)
 
 private data class HomeRailResult(
     val rail: HomeRail,
