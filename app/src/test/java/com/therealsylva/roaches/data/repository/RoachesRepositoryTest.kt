@@ -199,7 +199,7 @@ class RoachesRepositoryTest {
             "sex 2025",
             "naked women",
         ).forEach { query ->
-            assertThat(isMatureSearchQuery(query)).named(query).isTrue()
+            assertThat(isMatureSearchQuery(query)).isTrue()
         }
     }
 
@@ -215,7 +215,7 @@ class RoachesRepositoryTest {
             "Sex Education",
             "Oral History",
         ).forEach { query ->
-            assertThat(isMatureSearchQuery(query)).named(query).isFalse()
+            assertThat(isMatureSearchQuery(query)).isFalse()
         }
     }
 
