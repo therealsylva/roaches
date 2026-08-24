@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -127,42 +128,54 @@ def main() -> int:
     )
     token = None
     clean_rails: dict[str, list[dict]] = {}
-    for label, genre, sort in rails:
-        catalogue, token = request(
-            "POST",
-            "/wefeed-mobile-bff/subject-api/list",
-            {
-                "tabId": 2,
-                "page": 1,
-                "perPage": 20,
-                "classify": "All",
-                "country": "United States",
-                "genre": genre,
-                "sort": sort,
-                "year": "All",
-            },
-            token,
-        )
-        clean_rails[label] = [
-            item
-            for item in catalogue.get("items", [])
-            if int(item.get("subjectType", 0)) in (1, 2)
-            and "india" not in item.get("countryName", "").lower()
-            and "adult" not in item.get("genre", "").lower()
-            and not any(marker in item.get("title", "").lower() for marker in ("india", "bollywood"))
-            and (
-                not any(
-                    marker in item.get("title", "").lower()
-                    for marker in ("hindi", "tamil", "telugu", "malayalam", "kannada", "punjabi")
-                )
-                or any(
-                    marker in item.get("language", "").lower()
-                    for marker in ("english", "original")
-                )
+    for offset in range(0, len(rails), 2):
+        batch = rails[offset : offset + 2]
+        token_snapshot = token
+
+        def fetch_rail(rail: tuple[str, str, str]):
+            label, genre, sort = rail
+            catalogue, next_token = request(
+                "POST",
+                "/wefeed-mobile-bff/subject-api/list",
+                {
+                    "tabId": 2,
+                    "page": 1,
+                    "perPage": 20,
+                    "classify": "All",
+                    "country": "United States",
+                    "genre": genre,
+                    "sort": sort,
+                    "year": "All",
+                },
+                token_snapshot,
             )
-        ]
-        if not clean_rails[label]:
-            raise RuntimeError(f"structured {label} catalogue returned no clean title")
+            return label, catalogue, next_token
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(fetch_rail, batch))
+
+        for label, catalogue, next_token in results:
+            token = next_token or token
+            clean_rails[label] = [
+                item
+                for item in catalogue.get("items", [])
+                if int(item.get("subjectType", 0)) in (1, 2)
+                and "india" not in item.get("countryName", "").lower()
+                and "adult" not in item.get("genre", "").lower()
+                and not any(marker in item.get("title", "").lower() for marker in ("india", "bollywood"))
+                and (
+                    not any(
+                        marker in item.get("title", "").lower()
+                        for marker in ("hindi", "tamil", "telugu", "malayalam", "kannada", "punjabi")
+                    )
+                    or any(
+                        marker in item.get("language", "").lower()
+                        for marker in ("english", "original")
+                    )
+                )
+            ]
+            if not clean_rails[label]:
+                raise RuntimeError(f"structured {label} catalogue returned no clean title")
 
     if not token:
         _, token = request("GET", "/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version=")

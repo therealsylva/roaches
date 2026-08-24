@@ -15,6 +15,9 @@ import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.SubtitleTrack
 import com.therealsylva.roaches.data.remote.MovieBoxApi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -163,16 +166,25 @@ internal suspend fun resolveHome(
     val fresh = mutableListOf<Shelf>()
     var structuredFailure: Throwable? = null
 
-    for (rail in HOME_RAILS) {
-        val items = try {
-            fetchCatalogue(rail)
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (failure: Throwable) {
-            structuredFailure = failure
-            break
+    for (batch in HOME_RAILS.chunked(2)) {
+        val results = coroutineScope {
+            batch.map { rail ->
+                async {
+                    try {
+                        HomeRailResult(rail, fetchCatalogue(rail), null)
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (failure: Throwable) {
+                        HomeRailResult(rail, emptyList(), failure)
+                    }
+                }
+            }.awaitAll()
         }
-        if (items.isNotEmpty()) fresh += Shelf(rail.id, rail.title, items)
+        results.forEach { result ->
+            if (result.items.isNotEmpty()) fresh += Shelf(result.rail.id, result.rail.title, result.items)
+            if (structuredFailure == null) structuredFailure = result.failure
+        }
+        if (results.any { it.failure != null }) break
     }
 
     if (fresh.isNotEmpty()) {
@@ -203,6 +215,12 @@ internal suspend fun resolveHome(
     throw structuredFailure ?: legacyFailure
         ?: IllegalStateException("No Home sections were returned")
 }
+
+private data class HomeRailResult(
+    val rail: HomeRail,
+    val items: List<MediaItem>,
+    val failure: Throwable?,
+)
 
 internal fun parseLegacyHome(payload: Any, region: ContentRegion): List<Shelf> {
     val root = payload as? JSONObject
