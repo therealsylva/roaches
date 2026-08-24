@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -15,16 +16,17 @@ import uuid
 
 
 HOSTS = (
+    "https://api.aoneroom.com",
+    "https://api3.aoneroom.com",
     "https://api6.aoneroom.com",
-    "https://api5.aoneroom.com",
     "https://api4.aoneroom.com",
     "https://api4sg.aoneroom.com",
-    "https://api3.aoneroom.com",
-    "https://api6sg.aoneroom.com",
-    "https://api.inmoviebox.com",
+    "https://api5.aoneroom.com",
 )
 SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
 IDENTITY = str(uuid.uuid4())
+IDENTITY_HASH = hashlib.sha256(IDENTITY.encode()).digest()
+FORWARDED_IP = f"103.241.{IDENTITY_HASH[0] % 253 + 1}.{IDENTITY_HASH[1] % 253 + 1}"
 
 
 def md5_hex(value: bytes) -> str:
@@ -61,7 +63,7 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
         "X-Client-Token": f"{timestamp},{md5_hex(str(timestamp)[::-1].encode())}",
         "X-Tr-Signature": f"{timestamp}|2|{signature}",
         "X-Client-Status": "0",
-        "X-Forwarded-For": "103.241.80.40",
+        "X-Forwarded-For": FORWARDED_IP,
         "X-Client-Info": json.dumps(
             {
                 "package_name": "com.community.oneroom",
@@ -117,7 +119,66 @@ def request(method: str, path: str, payload: dict | None = None, token: str | No
 
 
 def main() -> int:
-    _, token = request("GET", "/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version=")
+    rails = (
+        ("Popular", "All", "Hottest"),
+        ("Latest", "All", "Latest"),
+        ("Action", "Action", "Hottest"),
+        ("Drama", "Drama", "Hottest"),
+        ("Comedy", "Comedy", "Hottest"),
+    )
+    token = None
+    clean_rails: dict[str, list[dict]] = {}
+    for offset in range(0, len(rails), 2):
+        batch = rails[offset : offset + 2]
+        token_snapshot = token
+
+        def fetch_rail(rail: tuple[str, str, str]):
+            label, genre, sort = rail
+            catalogue, next_token = request(
+                "POST",
+                "/wefeed-mobile-bff/subject-api/list",
+                {
+                    "tabId": 2,
+                    "page": 1,
+                    "perPage": 20,
+                    "classify": "All",
+                    "country": "United States",
+                    "genre": genre,
+                    "sort": sort,
+                    "year": "All",
+                },
+                token_snapshot,
+            )
+            return label, catalogue, next_token
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(fetch_rail, batch))
+
+        for label, catalogue, next_token in results:
+            token = next_token or token
+            clean_rails[label] = [
+                item
+                for item in catalogue.get("items", [])
+                if int(item.get("subjectType", 0)) in (1, 2)
+                and "india" not in item.get("countryName", "").lower()
+                and "adult" not in item.get("genre", "").lower()
+                and not any(marker in item.get("title", "").lower() for marker in ("india", "bollywood"))
+                and (
+                    not any(
+                        marker in item.get("title", "").lower()
+                        for marker in ("hindi", "tamil", "telugu", "malayalam", "kannada", "punjabi")
+                    )
+                    or any(
+                        marker in item.get("language", "").lower()
+                        for marker in ("english", "original")
+                    )
+                )
+            ]
+            if not clean_rails[label]:
+                raise RuntimeError(f"structured {label} catalogue returned no clean title")
+
+    if not token:
+        _, token = request("GET", "/wefeed-mobile-bff/tab-operating?page=1&tabId=0&version=")
     search, token = request(
         "POST",
         "/wefeed-mobile-bff/subject-api/search/v2",
@@ -178,35 +239,10 @@ def main() -> int:
     if not details.get("title") or not any(item.get("resourceLink") for item in streams):
         raise RuntimeError("details or playable resources missing")
 
-    catalogue, token = request(
-        "POST",
-        "/wefeed-mobile-bff/subject-api/list",
-        {
-            "tabId": 2,
-            "page": 1,
-            "perPage": 20,
-            "classify": "All",
-            "country": "United States",
-            "genre": "Action",
-            "sort": "Hottest",
-            "year": "All",
-        },
-        token,
-    )
-    clean_action = [
-        item
-        for item in catalogue.get("items", [])
-        if int(item.get("subjectType", 0)) in (1, 2)
-        and "action" in item.get("genre", "").lower()
-        and "india" not in item.get("countryName", "").lower()
-        and "[hindi]" not in item.get("title", "").lower()
-    ]
-    if not clean_action:
-        raise RuntimeError("structured Action catalogue returned no clean title")
     qualities = sorted({int(item.get("resolution", 0)) for item in streams if int(item.get("resolution", 0)) > 0}, reverse=True)
     print(
         f"LIVE_ANDROID_API_OK title={details['title']!r} streams={len(streams)} "
-        f"qualities={qualities} action={clean_action[0]['title']!r}"
+        f"qualities={qualities} rails={','.join(f'{name}:{len(items)}' for name, items in clean_rails.items())}"
     )
     return 0
 

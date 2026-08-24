@@ -13,6 +13,7 @@ import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
 import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.PreferredAudio
+import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.WatchEntry
 import com.therealsylva.roaches.data.remote.ClientIdentity
@@ -22,7 +23,7 @@ import java.util.UUID
 
 class LocalStore(context: Context) {
     companion object {
-        private const val PROVIDER_FORWARDED_IP = "103.241.80.40"
+        private const val PROVIDER_IP_PREFIX = "103.241"
     }
 
     private val appContext = context.applicationContext
@@ -31,11 +32,24 @@ class LocalStore(context: Context) {
     internal fun clientIdentity(): ClientIdentity {
         val installId = valueOrCreate("install_id") { UUID.randomUUID().toString() }
         val sessionId = valueOrCreate("session_id") { UUID.randomUUID().toString() }
+        val hash = installId.hashCode().toUInt().toLong()
+        val forwardedIp = "$PROVIDER_IP_PREFIX.${(hash shr 8) % 253 + 1}.${hash % 253 + 1}"
         return ClientIdentity(
             installId = installId,
             sessionId = sessionId,
-            forwardedIp = PROVIDER_FORWARDED_IP,
+            forwardedIp = forwardedIp,
         )
+    }
+
+    fun cachedHome(region: ContentRegion): List<Shelf> = decodeHomeCache(
+        preferences.getString(homeCacheKey(region), null),
+    )
+
+    fun cacheHome(region: ContentRegion, shelves: List<Shelf>) {
+        if (shelves.none { it.items.isNotEmpty() }) return
+        preferences.edit()
+            .putString(homeCacheKey(region), encodeHomeCache(shelves))
+            .apply()
     }
 
     fun settings(): AppSettings = AppSettings(
@@ -211,6 +225,8 @@ class LocalStore(context: Context) {
     private fun writeArray(key: String, objects: List<JSONObject>) {
         preferences.edit().putString(key, JSONArray(objects).toString()).apply()
     }
+
+    private fun homeCacheKey(region: ContentRegion) = "home_cache_v1_${region.name}"
 }
 
 private inline fun <reified T : Enum<T>> android.content.SharedPreferences.enumValue(
@@ -249,6 +265,37 @@ private fun mediaFromJson(json: JSONObject): MediaItem? {
         seasonCount = json.optInt("seasons"),
     )
 }
+
+internal fun encodeHomeCache(shelves: List<Shelf>): String = JSONObject()
+    .put("version", 1)
+    .put("savedAt", System.currentTimeMillis())
+    .put(
+        "shelves",
+        JSONArray(
+            shelves.filter { it.items.isNotEmpty() }.distinctBy(Shelf::id).take(6).map { shelf ->
+                JSONObject()
+                    .put("id", shelf.id)
+                    .put("title", shelf.title)
+                    .put("items", JSONArray(shelf.items.distinctBy(MediaItem::id).take(20).map(::mediaToJson)))
+            },
+        ),
+    )
+    .toString()
+
+internal fun decodeHomeCache(raw: String?): List<Shelf> = runCatching {
+    val root = JSONObject(raw.orEmpty())
+    if (root.optInt("version") != 1) return@runCatching emptyList()
+    val shelves = root.optJSONArray("shelves") ?: return@runCatching emptyList()
+    buildList {
+        repeat(shelves.length()) { index ->
+            val value = shelves.optJSONObject(index) ?: return@repeat
+            val id = value.optString("id").takeIf(String::isNotBlank) ?: return@repeat
+            val title = value.optString("title").takeIf(String::isNotBlank) ?: return@repeat
+            val items = (value.optJSONArray("items") ?: JSONArray()).objects().mapNotNull(::mediaFromJson)
+            if (items.isNotEmpty()) add(Shelf(id, title, items))
+        }
+    }
+}.getOrDefault(emptyList())
 
 private fun watchToJson(entry: WatchEntry) = JSONObject()
     .put("media", mediaToJson(entry.media))

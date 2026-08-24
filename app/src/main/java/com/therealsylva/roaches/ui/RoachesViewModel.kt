@@ -83,11 +83,13 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     private val mutableState = MutableStateFlow(RoachesUiState())
     val state: StateFlow<RoachesUiState> = mutableState.asStateFlow()
 
+    private var discoverJob: Job? = null
     private var searchJob: Job? = null
     private var lastProgressWrite = 0L
 
     init {
         refreshLocal()
+        mutableState.update { it.copy(shelves = repository.cachedDiscover()) }
         loadDiscover()
     }
 
@@ -97,27 +99,39 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun loadDiscover() {
-        if (mutableState.value.discoverLoading && mutableState.value.shelves.isNotEmpty()) return
-        mutableState.update { it.copy(discoverLoading = true, discoverError = null) }
-        viewModelScope.launch {
-            runCatching { repository.discover() }
-                .onSuccess { shelves ->
-                    mutableState.update {
-                        it.copy(
-                            shelves = shelves,
-                            discoverLoading = false,
-                            discoverError = if (shelves.isEmpty()) "No Home sections were returned." else null,
-                        )
-                    }
+        discoverJob?.cancel()
+        val expectedRepository = repository
+        val expectedRegion = mutableState.value.settings.contentRegion
+        val cached = expectedRepository.cachedDiscover()
+        mutableState.update {
+            it.copy(
+                shelves = it.shelves.ifEmpty { cached },
+                discoverLoading = true,
+                discoverError = null,
+            )
+        }
+        discoverJob = viewModelScope.launch {
+            try {
+                val shelves = expectedRepository.discover()
+                if (mutableState.value.settings.contentRegion != expectedRegion) return@launch
+                mutableState.update {
+                    it.copy(
+                        shelves = shelves,
+                        discoverLoading = false,
+                        discoverError = if (shelves.isEmpty()) "No Home sections were returned." else null,
+                    )
                 }
-                .onFailure { failure ->
-                    mutableState.update {
-                        it.copy(
-                            discoverLoading = false,
-                            discoverError = failure.userMessage("Home could not be loaded."),
-                        )
-                    }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (failure: Throwable) {
+                if (mutableState.value.settings.contentRegion != expectedRegion) return@launch
+                mutableState.update {
+                    it.copy(
+                        discoverLoading = false,
+                        discoverError = failure.userMessage("Home could not be loaded."),
+                    )
                 }
+            }
         }
     }
 
@@ -209,13 +223,15 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
 
     fun setContentRegion(region: ContentRegion) {
         if (region == mutableState.value.settings.contentRegion) return
+        discoverJob?.cancel()
         store.setContentRegion(region)
         repository = RoachesRepository(store)
         searchJob?.cancel()
+        val cached = repository.cachedDiscover()
         mutableState.update {
             it.copy(
                 settings = store.settings(),
-                shelves = emptyList(),
+                shelves = cached,
                 discoverLoading = false,
                 discoverError = null,
                 searchQuery = "",

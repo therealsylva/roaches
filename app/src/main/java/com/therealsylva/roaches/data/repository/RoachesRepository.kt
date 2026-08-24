@@ -14,6 +14,7 @@ import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.SubtitleTrack
 import com.therealsylva.roaches.data.remote.MovieBoxApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -21,36 +22,29 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 
-class RoachesRepository(store: LocalStore) {
+class RoachesRepository(private val store: LocalStore) {
     private val settings = store.settings()
     private val api = MovieBoxApi(store.clientIdentity())
 
-    suspend fun discover(): List<Shelf> = coroutineScope {
-        api.initialize()
-        val country = settings.contentRegion.providerCountry()
-        val rails = HOME_RAILS.map { rail ->
-            async {
-                rail to runCatching {
-                    parseCatalogueResults(
-                        api.catalogue(
-                            genre = rail.genre,
-                            country = country,
-                            sort = rail.sort,
-                        ),
-                        settings.contentRegion,
-                    )
-                }
-            }
-        }.awaitAll()
-        val shelves = rails.mapNotNull { (rail, result) ->
-            result.getOrNull()
-                ?.takeIf { it.isNotEmpty() }
-                ?.let { Shelf(rail.id, rail.title, it) }
-        }
-        if (shelves.isNotEmpty()) return@coroutineScope shelves
-        throw rails.firstNotNullOfOrNull { it.second.exceptionOrNull() }
-            ?: IllegalStateException("No Home sections were returned")
-    }
+    fun cachedDiscover(): List<Shelf> = store.cachedHome(settings.contentRegion)
+
+    suspend fun discover(): List<Shelf> = resolveHome(
+        cached = cachedDiscover(),
+        fetchCatalogue = { rail ->
+            parseCatalogueResults(
+                api.catalogue(
+                    genre = rail.genre,
+                    country = settings.contentRegion.providerCountry(),
+                    sort = rail.sort,
+                ),
+                settings.contentRegion,
+            )
+        },
+        fetchLegacy = {
+            parseLegacyHome(api.home(), settings.contentRegion)
+        },
+        persist = { shelves -> store.cacheHome(settings.contentRegion, shelves) },
+    )
 
     suspend fun search(query: String, page: Int = 1): List<MediaItem> {
         val payload = api.search(query, page)
@@ -153,7 +147,7 @@ class RoachesRepository(store: LocalStore) {
 
 private data class RankedMedia(val item: MediaItem, val penalty: Int, val index: Int)
 
-private data class HomeRail(val id: String, val title: String, val genre: String, val sort: String)
+internal data class HomeRail(val id: String, val title: String, val genre: String, val sort: String)
 
 private val HOME_RAILS = listOf(
     HomeRail("popular", "Popular now", "All", "Hottest"),
@@ -162,6 +156,99 @@ private val HOME_RAILS = listOf(
     HomeRail("drama", "Drama", "Drama", "Hottest"),
     HomeRail("comedy", "Comedy", "Comedy", "Hottest"),
 )
+
+internal suspend fun resolveHome(
+    cached: List<Shelf>,
+    fetchCatalogue: suspend (HomeRail) -> List<MediaItem>,
+    fetchLegacy: suspend () -> List<Shelf>,
+    persist: (List<Shelf>) -> Unit = {},
+): List<Shelf> {
+    val fresh = mutableListOf<Shelf>()
+    var structuredFailure: Throwable? = null
+
+    for (batch in HOME_RAILS.chunked(2)) {
+        val results = coroutineScope {
+            batch.map { rail ->
+                async {
+                    try {
+                        HomeRailResult(rail, fetchCatalogue(rail), null)
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (failure: Throwable) {
+                        HomeRailResult(rail, emptyList(), failure)
+                    }
+                }
+            }.awaitAll()
+        }
+        results.forEach { result ->
+            if (result.items.isNotEmpty()) fresh += Shelf(result.rail.id, result.rail.title, result.items)
+            if (structuredFailure == null) structuredFailure = result.failure
+        }
+        if (results.any { it.failure != null }) break
+    }
+
+    if (fresh.isNotEmpty()) {
+        val resolved = mergeHome(fresh, cached)
+        runCatching { persist(resolved) }
+        return resolved
+    }
+
+    var legacyFailure: Throwable? = null
+    val legacy = try {
+        fetchLegacy()
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (failure: Throwable) {
+        legacyFailure = failure
+        emptyList()
+    }
+    if (legacy.isNotEmpty()) {
+        val resolved = if (cached.isEmpty()) legacy else mergeHome(cached, legacy)
+        runCatching { persist(resolved) }
+        return resolved
+    }
+    if (cached.isNotEmpty()) return cached
+
+    throw structuredFailure ?: legacyFailure
+        ?: IllegalStateException("No Home sections were returned")
+}
+
+private fun mergeHome(primary: List<Shelf>, fallback: List<Shelf>): List<Shelf> =
+    (primary + fallback.filter { fallbackShelf ->
+        primary.none { it.id == fallbackShelf.id }
+    }).filter { it.items.isNotEmpty() }
+        .distinctBy(Shelf::id)
+        .take(6)
+
+private data class HomeRailResult(
+    val rail: HomeRail,
+    val items: List<MediaItem>,
+    val failure: Throwable?,
+)
+
+internal fun parseLegacyHome(payload: Any, region: ContentRegion): List<Shelf> {
+    val root = payload as? JSONObject
+    val groups = root?.optJSONArray("items") ?: JSONArray()
+    val shelves = buildList {
+        repeat(groups.length()) { index ->
+            val group = groups.optJSONObject(index) ?: return@repeat
+            val rawTitle = group.string("title", "name").orEmpty()
+            if (INDIA_MARKER.containsMatchIn(rawTitle)) return@repeat
+            val items = (group.optJSONArray("subjects") ?: JSONArray()).catalogueItems(region)
+            if (items.isNotEmpty()) {
+                add(Shelf("legacy-$index", normalizeShelfTitle(rawTitle, index), items))
+            }
+        }
+    }
+    if (shelves.isNotEmpty()) return shelves.take(6)
+
+    val fallback = when (payload) {
+        is JSONArray -> payload.catalogueItems(region)
+        is JSONObject -> payload.optJSONArray("subjects")?.catalogueItems(region).orEmpty()
+        else -> emptyList()
+    }
+    return if (fallback.isEmpty()) emptyList() else listOf(Shelf("legacy", "Discover", fallback))
+}
 
 internal fun parseCatalogueResults(payload: Any, region: ContentRegion): List<MediaItem> {
     val items = when (payload) {
@@ -246,7 +333,12 @@ private fun JSONObject.isAllowedInCatalogue(): Boolean {
     val title = string("title", "name").orEmpty()
     val country = string("countryName", "country", "area").orEmpty()
     val genre = string("genre", "genres").orEmpty()
-    return !INDIA_MARKER.containsMatchIn("$title $country") &&
+    val language = string("language", "lanName", "audio", "originalLanguage").orEmpty()
+    val taggedIndianAudio = INDIAN_AUDIO_MARKER.containsMatchIn(title)
+    val originalOrEnglishAvailable = ORIGINAL_OR_ENGLISH_MARKER.containsMatchIn(language)
+    return !INDIA_MARKER.containsMatchIn(country) &&
+        !INDIA_CONTENT_MARKER.containsMatchIn(title) &&
+        (!taggedIndianAudio || originalOrEnglishAvailable) &&
         !ADULT_MARKER.containsMatchIn(genre)
 }
 
@@ -313,6 +405,11 @@ private fun String.regionalPenalty(region: ContentRegion): Int = when (region) {
 private val INDIA_MARKER = Regex(
     "(?i)\\b(india|bollywood|hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi)\\b",
 )
+private val INDIA_CONTENT_MARKER = Regex("(?i)\\b(india|bollywood)\\b")
+private val INDIAN_AUDIO_MARKER = Regex(
+    "(?i)\\b(hindi|tamil|telugu|malayalam|kannada|punjabi|bengali|marathi)\\b",
+)
+private val ORIGINAL_OR_ENGLISH_MARKER = Regex("(?i)\\b(original|english|eng)\\b")
 private val ADULT_MARKER = Regex("(?i)\\badult\\b")
 private val UK_MARKER = Regex("(?i)\\b(united kingdom|british|britain|england|english)\\b")
 private val NIGERIA_MARKER = Regex("(?i)\\b(nigeria|nigerian|nollywood)\\b")
