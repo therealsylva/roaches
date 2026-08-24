@@ -160,6 +160,63 @@ class RoachesRepositoryTest {
             .isFalse()
         assertThat(shouldUseWebSearchFallback(emptyList(), "sp", 1)).isFalse()
         assertThat(shouldUseWebSearchFallback(emptyList(), "---", 1)).isFalse()
+        assertThat(
+            shouldUseWebSearchFallback(
+                listOf(MediaItem("adult", "Adult Content", MediaKind.Movie)),
+                "adult content",
+                page = 1,
+                allowMature = true,
+            ),
+        ).isTrue()
+        assertThat(
+            shouldUseWebSearchFallback(emptyList(), "18+", page = 1, allowMature = true),
+        ).isTrue()
+        assertThat(shouldUseWebSearchFallback(toyResults, "toy", page = 1, allowMature = true))
+            .isTrue()
+        assertThat(shouldUseWebSearchFallback(emptyList(), "18+", page = 2, allowMature = true))
+            .isFalse()
+    }
+
+    @Test
+    fun matureQueryDetectionCoversExplicitFamiliesAndVariants() {
+        listOf(
+            "adult",
+            "adults only",
+            "pornography",
+            "erotica",
+            "NSFW movies",
+            "18+",
+            "hentai",
+            "uncensored",
+            "step-sister",
+            "camgirls",
+            "orgies",
+            "sex videos",
+            "naked",
+            "nude actresses",
+            "oral clips",
+            "sex nude",
+            "sex 2025",
+            "naked women",
+        ).forEach { query ->
+            assertThat(isMatureSearchQuery(query)).isTrue()
+        }
+    }
+
+    @Test
+    fun matureQueryDetectionDoesNotBlockOrdinaryTitleWords() {
+        listOf(
+            "Toy Story",
+            "Hot Fuzz",
+            "Illicit Desire",
+            "Virgin Territory",
+            "Spider-Man Brand New Day",
+            "The Naked Gun",
+            "Sex Education",
+            "Oral History",
+        ).forEach { query ->
+            assertThat(isMatureSearchQuery(query)).isFalse()
+        }
     }
 
     @Test
@@ -236,6 +293,63 @@ class RoachesRepositoryTest {
         )
 
         assertThat(results.map { it.id }).containsExactly("english")
+    }
+
+    @Test
+    fun searchBlocksMatureResultsByDefaultEvenWithAnyAudio() {
+        val payload = JSONObject(
+            """
+            {
+              "items": [
+                {"subjectId":"adult-genre","title":"Late title","subjectType":1,"genre":"Adult"},
+                {"subjectId":"erotic-genre","title":"Another title","subjectType":1,"genre":"Erotic, Romance"},
+                {"subjectId":"explicit-title","title":"Adult Content","subjectType":1,"genre":"Comedy"},
+                {"subjectId":"plural-title","title":"Adults Only! S1-S3","subjectType":2,"genre":"Documentary"},
+                {"subjectId":"adult-flag","title":"Generic title","subjectType":1,"isAdult":true},
+                {"subjectId":"adult-rating","title":"Weak metadata","subjectType":1,"contentRating":"TV-MA"},
+                {"subjectId":"clean","title":"Family Adventure","subjectType":1,"genre":"Family, Adventure"}
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val results = parseSearchResults(
+            payload,
+            "title",
+            PreferredAudio.Any,
+            ContentRegion.GlobalEnglish,
+        )
+
+        assertThat(results.map(MediaItem::id)).containsExactly("clean")
+    }
+
+    @Test
+    fun unlockedSearchReturnsMovieBoxMatureResults() {
+        val payload = JSONObject(
+            """
+            {
+              "items": [
+                {"subjectId":"adult-genre","title":"Late title","subjectType":1,"genre":"Adult"},
+                {"subjectId":"explicit-title","title":"Adult Content","subjectType":1,"genre":"Comedy"},
+                {"subjectId":"clean","title":"Family Adventure","subjectType":1,"genre":"Family"}
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val results = parseSearchResults(
+            payload,
+            "title",
+            PreferredAudio.Any,
+            ContentRegion.GlobalEnglish,
+            allowMature = true,
+        )
+
+        assertThat(results.map(MediaItem::id)).containsExactly(
+            "adult-genre",
+            "explicit-title",
+            "clean",
+        )
     }
 
     @Test

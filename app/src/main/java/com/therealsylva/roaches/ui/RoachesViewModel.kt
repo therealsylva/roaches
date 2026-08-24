@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.therealsylva.roaches.data.local.EggsGate
 import com.therealsylva.roaches.data.local.LocalStore
 import com.therealsylva.roaches.data.download.SeasonDownloadCoordinator
 import com.therealsylva.roaches.data.download.selectSeasonDownloadSource
@@ -320,6 +321,32 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     fun setDarkTheme(enabled: Boolean) {
         store.setDarkTheme(enabled)
         mutableState.update { it.copy(settings = store.settings()) }
+    }
+
+    fun enableEggs(key: String) {
+        val access = EggsGate.accessFor(key)
+        store.setEggsAccess(access.enabled, access.matureContentUnlocked)
+        applyEggsAccess("Eggs enabled")
+    }
+
+    fun disableEggs() {
+        store.setEggsAccess(enabled = false, unlocked = false)
+        applyEggsAccess("Eggs disabled")
+    }
+
+    private fun applyEggsAccess(notice: String) {
+        searchJob?.cancel()
+        repository = RoachesRepository(store)
+        mutableState.update {
+            it.copy(
+                settings = store.settings(),
+                searchQuery = "",
+                searchResults = emptyList(),
+                searchLoading = false,
+                searchError = null,
+                notice = notice,
+            )
+        }
     }
 
     fun clearHistory() {

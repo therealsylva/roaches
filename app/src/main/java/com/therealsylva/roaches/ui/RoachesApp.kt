@@ -141,6 +141,8 @@ fun RoachesApp(
                         onAudio = viewModel::setPreferredAudio,
                         onWifiOnly = viewModel::setWifiOnlyDownloads,
                         onDarkTheme = viewModel::setDarkTheme,
+                        onEggsKey = viewModel::enableEggs,
+                        onEggsOff = viewModel::disableEggs,
                         onClearHistory = viewModel::clearHistory,
                         onCheckUpdates = viewModel::checkForUpdates,
                     )

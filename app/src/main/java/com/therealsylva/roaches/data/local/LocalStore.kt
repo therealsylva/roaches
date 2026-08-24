@@ -129,13 +129,19 @@ class LocalStore(context: Context) {
             .apply()
     }
 
-    fun settings(): AppSettings = AppSettings(
-        contentRegion = preferences.enumValue("content_region", ContentRegion.GlobalEnglish),
-        playbackQuality = preferences.enumValue("playback_quality", PlaybackQuality.Auto),
-        preferredAudio = preferences.enumValue("preferred_audio", PreferredAudio.English),
-        wifiOnlyDownloads = preferences.getBoolean("wifi_only_downloads", false),
-        darkTheme = preferences.getBoolean("dark_theme", true),
-    )
+    fun settings(): AppSettings {
+        val eggsEnabled = preferences.getBoolean("eggs_enabled", false)
+        return AppSettings(
+            contentRegion = preferences.enumValue("content_region", ContentRegion.GlobalEnglish),
+            playbackQuality = preferences.enumValue("playback_quality", PlaybackQuality.Auto),
+            preferredAudio = preferences.enumValue("preferred_audio", PreferredAudio.English),
+            wifiOnlyDownloads = preferences.getBoolean("wifi_only_downloads", false),
+            darkTheme = preferences.getBoolean("dark_theme", true),
+            eggsEnabled = eggsEnabled,
+            matureContentUnlocked = eggsEnabled &&
+                preferences.getBoolean("mature_content_unlocked", false),
+        )
+    }
 
     fun setContentRegion(region: ContentRegion) {
         preferences.edit().putString("content_region", region.name).apply()
@@ -155,6 +161,13 @@ class LocalStore(context: Context) {
 
     fun setDarkTheme(enabled: Boolean) {
         preferences.edit().putBoolean("dark_theme", enabled).apply()
+    }
+
+    fun setEggsAccess(enabled: Boolean, unlocked: Boolean) {
+        preferences.edit()
+            .putBoolean("eggs_enabled", enabled)
+            .putBoolean("mature_content_unlocked", enabled && unlocked)
+            .apply()
     }
 
     fun watchlist(): List<MediaItem> = readArray("watchlist").objects().mapNotNull(::mediaFromJson)

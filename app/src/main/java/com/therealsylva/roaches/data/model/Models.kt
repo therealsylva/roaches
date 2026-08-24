@@ -50,6 +50,8 @@ data class AppSettings(
     val preferredAudio: PreferredAudio = PreferredAudio.English,
     val wifiOnlyDownloads: Boolean = false,
     val darkTheme: Boolean = true,
+    val eggsEnabled: Boolean = false,
+    val matureContentUnlocked: Boolean = false,
 )
 
 data class MediaItem(
