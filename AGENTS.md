@@ -31,7 +31,7 @@ application chrome recedes.
 - no emojis, fake testimonials, fake ratings or aspirational filler copy;
 - no phrases such as “elevate”, “cinematic universe”, “unlock premium”,
   “seamless entertainment” or “reimagined”;
-- no copied MovieBox or Netflix graphics, marks or exact compositions;
+- no copied third-party graphics, marks or exact interface compositions;
 - no advertising, analytics, attribution, account, subscription or telemetry
   dependency.
 

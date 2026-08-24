@@ -613,7 +613,8 @@ class LocalStore(context: Context) {
         preferences.edit().putString(key, JSONArray(objects).toString()).apply()
     }
 
-    private fun homeCacheKey(region: ContentRegion) = "home_cache_v1_${region.name}"
+    // v2 invalidates catalogue rows cached before provider maturity flags were enforced.
+    private fun homeCacheKey(region: ContentRegion) = "home_cache_v2_${region.name}"
 }
 
 private inline fun <reified T : Enum<T>> android.content.SharedPreferences.enumValue(
