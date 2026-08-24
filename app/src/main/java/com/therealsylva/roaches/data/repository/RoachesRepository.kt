@@ -49,8 +49,40 @@ class RoachesRepository(private val store: LocalStore) {
     )
 
     suspend fun search(query: String, page: Int = 1): List<MediaItem> {
-        val payload = api.search(query, page)
-        return parseSearchResults(payload, query, settings.preferredAudio, settings.contentRegion)
+        var mobileFailure: Throwable? = null
+        val mobileResults = try {
+            parseSearchResults(
+                api.search(query, page),
+                query,
+                settings.preferredAudio,
+                settings.contentRegion,
+            )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            mobileFailure = failure
+            emptyList()
+        }
+        if (!shouldUseWebSearchFallback(mobileResults, query, page)) {
+            mobileFailure?.let { throw it }
+            return mobileResults
+        }
+
+        val websiteResults = try {
+            parseSearchResults(
+                api.websiteSearch(query),
+                query,
+                settings.preferredAudio,
+                settings.contentRegion,
+            )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            if (mobileResults.isEmpty()) mobileFailure?.let { throw it }
+            emptyList()
+        }
+        if (websiteResults.isEmpty()) mobileFailure?.let { throw it }
+        return mergeSearchResults(mobileResults, websiteResults, query)
     }
 
     suspend fun category(category: BrowseCategory, page: Int = 1): List<MediaItem> {
@@ -524,13 +556,56 @@ internal fun parseSearchResults(
             with(ranked.item) { "${title.lowercase(Locale.US)}-$year-$kind" }
         }
         .sortedWith(
-            compareByDescending<RankedMedia> { it.item.title.equals(query, ignoreCase = true) }
-                .thenByDescending { it.item.title.startsWith(query, ignoreCase = true) }
+            compareBy<RankedMedia> { it.item.searchRelevance(query) }
                 .thenBy(RankedMedia::penalty)
                 .thenByDescending { it.item.year },
         )
         .map(RankedMedia::item)
 }
+
+internal fun List<MediaItem>.hasStrongTitleMatch(query: String): Boolean {
+    val normalizedQuery = query.normalizedSearchText()
+    return normalizedQuery.isNotBlank() && any { item ->
+        normalizedQuery in item.title.normalizedSearchText()
+    }
+}
+
+internal fun shouldUseWebSearchFallback(
+    mobile: List<MediaItem>,
+    query: String,
+    page: Int,
+): Boolean = page == 1 &&
+    query.normalizedSearchText().length >= 3 &&
+    !mobile.hasStrongTitleMatch(query)
+
+internal fun mergeSearchResults(
+    mobile: List<MediaItem>,
+    website: List<MediaItem>,
+    query: String,
+): List<MediaItem> = (website + mobile)
+    .distinctBy { item -> item.canonicalSearchKey() }
+    .sortedWith(
+        compareBy<MediaItem> { it.searchRelevance(query) }
+            .thenByDescending(MediaItem::year),
+    )
+
+private fun MediaItem.canonicalSearchKey(): String =
+    "${title.normalizedSearchText()}-$year-$kind"
+
+private fun MediaItem.searchRelevance(query: String): Int {
+    val normalizedTitle = title.normalizedSearchText()
+    val normalizedQuery = query.normalizedSearchText()
+    if (normalizedQuery.isBlank()) return 4
+    return when {
+        normalizedTitle == normalizedQuery -> 0
+        normalizedTitle.startsWith(normalizedQuery) -> 1
+        normalizedQuery in normalizedTitle -> 2
+        normalizedTitle in normalizedQuery -> 3
+        else -> 4
+    }
+}
+
+private fun String.normalizedSearchText(): String = lowercase(Locale.US).filter(Char::isLetterOrDigit)
 
 private fun primarySearchObjects(payload: Any): List<JSONObject> {
     val subjects = when (payload) {

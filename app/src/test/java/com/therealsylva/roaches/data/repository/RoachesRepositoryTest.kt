@@ -143,6 +143,51 @@ class RoachesRepositoryTest {
     }
 
     @Test
+    fun fallbackDecisionUsesPunctuationInsensitiveTitleMatching() {
+        val toyResults = listOf(
+            MediaItem("toy-story-5", "Toy Story 5", MediaKind.Movie, year = "2026"),
+        )
+        val incompleteSpiderManResults = listOf(
+            MediaItem("brand-new-day", "Brand New Day", MediaKind.Movie, year = "2026"),
+            MediaItem("homecoming", "Spider-Man: Homecoming", MediaKind.Movie, year = "2017"),
+        )
+
+        assertThat(toyResults.hasStrongTitleMatch("toy")).isTrue()
+        assertThat(incompleteSpiderManResults.hasStrongTitleMatch("spiderman brand new day")).isFalse()
+        assertThat(shouldUseWebSearchFallback(incompleteSpiderManResults, "spider-man brand new day", 1))
+            .isTrue()
+        assertThat(shouldUseWebSearchFallback(incompleteSpiderManResults, "spider-man brand new day", 2))
+            .isFalse()
+        assertThat(shouldUseWebSearchFallback(emptyList(), "sp", 1)).isFalse()
+        assertThat(shouldUseWebSearchFallback(emptyList(), "---", 1)).isFalse()
+    }
+
+    @Test
+    fun websiteExactMatchRanksAheadOfMobileRelatedResultsAndDeduplicates() {
+        val mobile = listOf(
+            MediaItem("brand-new-day", "Brand New Day", MediaKind.Movie, year = "2026"),
+            MediaItem("homecoming", "Spider-Man: Homecoming", MediaKind.Movie, year = "2017"),
+            MediaItem("duplicate", "Spider-Man: Brand New Day", MediaKind.Movie, year = "2026"),
+        )
+        val website = listOf(
+            MediaItem(
+                "6026412232966389904",
+                "Spider-Man: Brand New Day",
+                MediaKind.Movie,
+                year = "2026",
+            ),
+        )
+
+        val merged = mergeSearchResults(mobile, website, "spiderman brand new day")
+
+        assertThat(merged.map(MediaItem::id)).containsExactly(
+            "6026412232966389904",
+            "brand-new-day",
+            "homecoming",
+        ).inOrder()
+    }
+
+    @Test
     fun englishSearchRemovesBengaliDubAndKeepsEnglishTitle() {
         val payload = JSONObject(
             """

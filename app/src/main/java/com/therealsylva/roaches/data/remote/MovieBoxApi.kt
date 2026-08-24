@@ -68,6 +68,7 @@ internal class MovieBoxApi(
     }
 
     private val signer = RequestSigner(identity)
+    private val webSearch = MovieBoxWebSearch(client)
     private val token = AtomicReference<String?>(null)
     private val activeHost = AtomicInteger(0)
     private val sessionMutex = Mutex()
@@ -91,6 +92,8 @@ internal class MovieBoxApi(
             .toString()
         return request("POST", "/wefeed-mobile-bff/subject-api/search/v2", body)
     }
+
+    suspend fun websiteSearch(query: String): JSONArray = webSearch.search(query)
 
     suspend fun catalogue(
         genre: String,
