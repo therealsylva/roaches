@@ -18,7 +18,7 @@ class RoachesNavigationTest {
 
     @Test
     fun primaryDestinationsAndSettingsAreReachable() {
-        compose.onNodeWithContentDescription("Discover").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Home").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Home feed region").assertIsDisplayed()
         compose.onNodeWithContentDescription("Back").performClick()
