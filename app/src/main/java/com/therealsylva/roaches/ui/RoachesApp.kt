@@ -59,6 +59,8 @@ fun RoachesApp(
     viewModel: RoachesViewModel = viewModel(),
     onPlayerMode: (Boolean) -> Unit,
     isInPictureInPicture: () -> Boolean,
+    sharedText: String? = null,
+    onSharedTextConsumed: () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val view = LocalView.current
@@ -79,6 +81,13 @@ fun RoachesApp(
             if (state.notice != null) {
                 delay(2_600)
                 viewModel.dismissNotice()
+            }
+        }
+
+        LaunchedEffect(sharedText) {
+            sharedText?.let {
+                viewModel.openLinkSave(it)
+                onSharedTextConsumed()
             }
         }
 
@@ -213,7 +222,30 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                 MainDestination.Downloads -> DownloadsScreen(
                     downloads = state.downloads,
                     seasonDownloads = state.seasonDownloads,
+                    linkSaveVisible = state.linkSaveVisible,
+                    linkSaveUrl = state.linkSaveUrl,
+                    linkDownloadMode = state.linkDownloadMode,
+                    linkVideoQuality = state.linkVideoQuality,
+                    linkAudioBitrate = state.linkAudioBitrate,
+                    linkSaveLoading = state.linkSaveLoading,
+                    linkSaveError = state.linkSaveError,
+                    linkPicker = state.linkPicker,
+                    cobaltChallengeSiteKey = state.cobaltChallengeSiteKey,
+                    cobaltChallengeNonce = state.cobaltChallengeNonce,
+                    linkRetryTitle = state.linkRetryTitle,
                     onRefresh = viewModel::refreshDownloads,
+                    onOpenLinkSave = { viewModel.openLinkSave() },
+                    onDismissLinkSave = viewModel::dismissLinkSave,
+                    onLinkUrl = viewModel::updateLinkSaveUrl,
+                    onLinkMode = viewModel::setLinkDownloadMode,
+                    onLinkVideoQuality = viewModel::setLinkVideoQuality,
+                    onLinkAudioBitrate = viewModel::setLinkAudioBitrate,
+                    onSubmitLink = viewModel::submitLinkSave,
+                    onChallengeToken = viewModel::completeCobaltChallenge,
+                    onChallengeError = viewModel::cobaltChallengeFailed,
+                    onRetryChallenge = viewModel::retryCobaltChallenge,
+                    onSavePickerFile = viewModel::saveCobaltPickerFile,
+                    onSaveAllPickerFiles = viewModel::saveAllCobaltPickerFiles,
                     onRemove = viewModel::removeDownload,
                     onPlay = viewModel::playDownload,
                     onRetry = viewModel::retryDownload,

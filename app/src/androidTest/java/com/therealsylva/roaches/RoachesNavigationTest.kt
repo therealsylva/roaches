@@ -31,6 +31,16 @@ class RoachesNavigationTest {
     }
 
     @Test
+    fun saveLinkLivesInsideDownloads() {
+        compose.onNodeWithContentDescription("Downloads").performClick()
+        compose.onNodeWithText("Save link").performClick()
+
+        compose.onNodeWithText("Save a media link").assertIsDisplayed()
+        compose.onNodeWithText("Media link").assertIsDisplayed()
+        compose.onNodeWithText("Video quality").assertIsDisplayed()
+    }
+
+    @Test
     fun eggsGatePromptsForAKey() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Enable eggs").performScrollTo().performClick()

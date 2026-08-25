@@ -23,8 +23,8 @@ android {
         applicationId = "com.therealsylva.roaches"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.2.10"
+        versionCode = 13
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
@@ -103,6 +103,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.google.truth:truth:1.4.4")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20240303")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

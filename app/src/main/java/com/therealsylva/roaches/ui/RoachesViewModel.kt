@@ -1,6 +1,7 @@
 package com.therealsylva.roaches.ui
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
@@ -12,10 +13,17 @@ import com.therealsylva.roaches.data.download.selectSeasonDownloadSource
 import com.therealsylva.roaches.data.model.AppSettings
 import com.therealsylva.roaches.data.model.BrowseCategory
 import com.therealsylva.roaches.data.model.ContentRegion
+import com.therealsylva.roaches.data.model.CobaltPrepareResult
+import com.therealsylva.roaches.data.model.CobaltPreparedFile
+import com.therealsylva.roaches.data.model.CobaltSaveRequest
 import com.therealsylva.roaches.data.model.DownloadEntry
+import com.therealsylva.roaches.data.model.DownloadMediaType
 import com.therealsylva.roaches.data.model.DownloadPreference
 import com.therealsylva.roaches.data.model.DownloadState
 import com.therealsylva.roaches.data.model.LocalMediaEntry
+import com.therealsylva.roaches.data.model.LinkAudioBitrate
+import com.therealsylva.roaches.data.model.LinkDownloadMode
+import com.therealsylva.roaches.data.model.LinkVideoQuality
 import com.therealsylva.roaches.data.model.MediaDetails
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.PlaybackQuality
@@ -26,7 +34,10 @@ import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.SourceIntent
 import com.therealsylva.roaches.data.model.WatchEntry
+import com.therealsylva.roaches.data.model.extractHttpUrl
 import com.therealsylva.roaches.data.remote.AppUpdateInstaller
+import com.therealsylva.roaches.data.remote.CobaltApi
+import com.therealsylva.roaches.data.remote.CobaltChallengeRequired
 import com.therealsylva.roaches.data.remote.UpdateChecker
 import com.therealsylva.roaches.data.repository.RoachesRepository
 import kotlinx.coroutines.CancellationException
@@ -78,6 +89,17 @@ data class RoachesUiState(
     val downloads: List<DownloadEntry> = emptyList(),
     val seasonDownloads: List<SeasonDownloadProgress> = emptyList(),
     val localMedia: List<LocalMediaEntry> = emptyList(),
+    val linkSaveVisible: Boolean = false,
+    val linkSaveUrl: String = "",
+    val linkDownloadMode: LinkDownloadMode = LinkDownloadMode.Video,
+    val linkVideoQuality: LinkVideoQuality = LinkVideoQuality.FullHd,
+    val linkAudioBitrate: LinkAudioBitrate = LinkAudioBitrate.Standard,
+    val linkSaveLoading: Boolean = false,
+    val linkSaveError: String? = null,
+    val linkPicker: CobaltPrepareResult.Picker? = null,
+    val cobaltChallengeSiteKey: String? = null,
+    val cobaltChallengeNonce: Int = 0,
+    val linkRetryTitle: String? = null,
     val settings: AppSettings = AppSettings(),
     val updateLoading: Boolean = false,
     val updateMessage: String? = null,
@@ -86,15 +108,25 @@ data class RoachesUiState(
 )
 
 class RoachesViewModel(application: Application) : AndroidViewModel(application) {
+    private sealed interface CobaltOperation {
+        val request: CobaltSaveRequest
+
+        data class New(override val request: CobaltSaveRequest) : CobaltOperation
+        data class Retry(val entry: DownloadEntry, override val request: CobaltSaveRequest) : CobaltOperation
+    }
+
     private val store = LocalStore(application)
     private var repository = RoachesRepository(store)
     private val updateChecker = UpdateChecker()
     private val updateInstaller = AppUpdateInstaller(application)
+    private val cobaltApi = CobaltApi()
     private val mutableState = MutableStateFlow(RoachesUiState())
     val state: StateFlow<RoachesUiState> = mutableState.asStateFlow()
 
     private var discoverJob: Job? = null
     private var searchJob: Job? = null
+    private var cobaltJob: Job? = null
+    private var cobaltOperation: CobaltOperation? = null
     private var lastProgressWrite = 0L
 
     init {
@@ -294,7 +326,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
             SeasonDownloadCoordinator.schedule(getApplication(), replace = true)
         }
 
-        val singles = queuedBeforeChange.filter { it.batchId == null }
+        val singles = queuedBeforeChange.filter { it.batchId == null && !it.isLinkSave }
         if (singles.isEmpty()) {
             if (seasonRetryCount > 0) {
                 mutableState.update { it.copy(notice = "Restarting $seasonRetryCount queued episodes") }
@@ -503,6 +535,307 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
 
     fun isLiked(item: MediaItem?): Boolean = item != null && mutableState.value.liked.any { it.id == item.id }
 
+    fun openLinkSave(sharedText: String? = null) {
+        cobaltJob?.cancel()
+        cobaltOperation = null
+        val sharedUrl = sharedText?.let(::extractHttpUrl)
+        mutableState.update {
+            it.copy(
+                destination = MainDestination.Downloads,
+                screen = AppScreen.Browse,
+                linkSaveVisible = true,
+                linkSaveUrl = sharedUrl ?: sharedText?.trim().orEmpty(),
+                linkSaveLoading = false,
+                linkSaveError = null,
+                linkPicker = null,
+                cobaltChallengeSiteKey = null,
+                linkRetryTitle = null,
+            )
+        }
+    }
+
+    fun updateLinkSaveUrl(value: String) {
+        resetLinkPreparation()
+        mutableState.update { it.copy(linkSaveUrl = value.take(2_048)) }
+    }
+
+    fun setLinkDownloadMode(mode: LinkDownloadMode) {
+        if (mode == mutableState.value.linkDownloadMode) return
+        resetLinkPreparation()
+        mutableState.update { it.copy(linkDownloadMode = mode) }
+    }
+
+    fun setLinkVideoQuality(quality: LinkVideoQuality) {
+        if (quality == mutableState.value.linkVideoQuality) return
+        resetLinkPreparation()
+        mutableState.update { it.copy(linkVideoQuality = quality) }
+    }
+
+    fun setLinkAudioBitrate(bitrate: LinkAudioBitrate) {
+        if (bitrate == mutableState.value.linkAudioBitrate) return
+        resetLinkPreparation()
+        mutableState.update { it.copy(linkAudioBitrate = bitrate) }
+    }
+
+    fun submitLinkSave() {
+        val current = mutableState.value
+        val sourceUrl = extractHttpUrl(current.linkSaveUrl)
+        if (sourceUrl == null) {
+            mutableState.update { it.copy(linkSaveError = "Paste a complete http or https link.") }
+            return
+        }
+        val request = CobaltSaveRequest(
+            sourceUrl = sourceUrl,
+            mode = current.linkDownloadMode,
+            videoQuality = current.linkVideoQuality,
+            audioBitrate = current.linkAudioBitrate,
+        )
+        mutableState.update { it.copy(linkSaveUrl = sourceUrl) }
+        startCobaltOperation(CobaltOperation.New(request))
+    }
+
+    fun dismissLinkSave() {
+        cobaltJob?.cancel()
+        cobaltJob = null
+        cobaltOperation = null
+        mutableState.update {
+            it.copy(
+                linkSaveVisible = false,
+                linkSaveLoading = false,
+                linkSaveError = null,
+                linkPicker = null,
+                cobaltChallengeSiteKey = null,
+                linkRetryTitle = null,
+            )
+        }
+    }
+
+    fun completeCobaltChallenge(challengeResponse: String) {
+        val operation = cobaltOperation ?: return
+        if (mutableState.value.linkSaveLoading) return
+        cobaltJob?.cancel()
+        mutableState.update { it.copy(linkSaveLoading = true, linkSaveError = null) }
+        cobaltJob = viewModelScope.launch {
+            try {
+                cobaltApi.createSession(challengeResponse)
+                if (cobaltOperation != operation) return@launch
+                mutableState.update { it.copy(cobaltChallengeSiteKey = null) }
+                runCobaltOperation(operation)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (failure: Throwable) {
+                if (cobaltOperation != operation) return@launch
+                cobaltApi.clearSession()
+                mutableState.update {
+                    it.copy(
+                        linkSaveLoading = false,
+                        linkSaveError = failure.userMessage("The connection check failed. Try again."),
+                        cobaltChallengeNonce = it.cobaltChallengeNonce + 1,
+                    )
+                }
+            }
+        }
+    }
+
+    fun cobaltChallengeFailed(message: String) {
+        mutableState.update {
+            it.copy(
+                linkSaveLoading = false,
+                linkSaveError = message.take(160).ifBlank { "The connection check could not load." },
+            )
+        }
+    }
+
+    fun retryCobaltChallenge() {
+        mutableState.update {
+            it.copy(
+                linkSaveError = null,
+                cobaltChallengeNonce = it.cobaltChallengeNonce + 1,
+            )
+        }
+    }
+
+    fun saveCobaltPickerFile(file: CobaltPreparedFile) {
+        val operation = cobaltOperation as? CobaltOperation.New ?: return
+        runCatching { store.enqueueCobaltDownload(operation.request, file) }
+            .onSuccess { finishNewLinkSave(1) }
+            .onFailure { failure ->
+                mutableState.update { it.copy(linkSaveError = failure.userMessage("Download could not start.")) }
+            }
+    }
+
+    fun saveAllCobaltPickerFiles() {
+        val operation = cobaltOperation as? CobaltOperation.New ?: return
+        val files = mutableState.value.linkPicker?.items.orEmpty()
+        if (files.isEmpty()) return
+        var saved = 0
+        var failed = 0
+        files.forEach { file ->
+            runCatching { store.enqueueCobaltDownload(operation.request, file) }
+                .onSuccess { saved += 1 }
+                .onFailure { failed += 1 }
+        }
+        if (saved > 0) {
+            finishNewLinkSave(saved, failed)
+        } else {
+            mutableState.update { it.copy(linkSaveError = "These items could not be added to Downloads.") }
+        }
+    }
+
+    private fun resetLinkPreparation() {
+        cobaltJob?.cancel()
+        cobaltJob = null
+        cobaltOperation = null
+        mutableState.update {
+            it.copy(
+                linkSaveLoading = false,
+                linkSaveError = null,
+                linkPicker = null,
+                cobaltChallengeSiteKey = null,
+                linkRetryTitle = null,
+            )
+        }
+    }
+
+    private fun startCobaltOperation(operation: CobaltOperation) {
+        cobaltJob?.cancel()
+        cobaltOperation = operation
+        mutableState.update {
+            it.copy(
+                linkSaveLoading = true,
+                linkSaveError = null,
+                linkPicker = null,
+                cobaltChallengeSiteKey = null,
+                linkRetryTitle = (operation as? CobaltOperation.Retry)?.entry?.media?.title,
+            )
+        }
+        cobaltJob = viewModelScope.launch { runCobaltOperation(operation) }
+    }
+
+    private suspend fun runCobaltOperation(operation: CobaltOperation) {
+        try {
+            val result = cobaltApi.prepare(operation.request)
+            if (cobaltOperation != operation) return
+            when (operation) {
+                is CobaltOperation.New -> handleNewCobaltResult(operation, result)
+                is CobaltOperation.Retry -> handleCobaltRetryResult(operation, result)
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (challenge: CobaltChallengeRequired) {
+            if (cobaltOperation != operation) return
+            mutableState.update {
+                it.copy(
+                    linkSaveVisible = true,
+                    linkSaveLoading = false,
+                    linkSaveError = null,
+                    cobaltChallengeSiteKey = challenge.siteKey,
+                    cobaltChallengeNonce = it.cobaltChallengeNonce + 1,
+                )
+            }
+        } catch (failure: Throwable) {
+            if (cobaltOperation != operation) return
+            if (operation is CobaltOperation.Retry) {
+                cobaltOperation = null
+                mutableState.update {
+                    it.copy(
+                        linkSaveVisible = false,
+                        linkSaveLoading = false,
+                        linkSaveError = null,
+                        cobaltChallengeSiteKey = null,
+                        linkRetryTitle = null,
+                        notice = failure.userMessage("Download could not be retried."),
+                    )
+                }
+            } else {
+                mutableState.update {
+                    it.copy(
+                        linkSaveLoading = false,
+                        linkSaveError = failure.userMessage("Cobalt could not prepare this link."),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun handleNewCobaltResult(
+        operation: CobaltOperation.New,
+        result: CobaltPrepareResult,
+    ) {
+        when (result) {
+            is CobaltPrepareResult.File -> runCatching {
+                store.enqueueCobaltDownload(operation.request, result.file)
+            }.onSuccess {
+                finishNewLinkSave(1)
+            }.onFailure { failure ->
+                mutableState.update {
+                    it.copy(
+                        linkSaveLoading = false,
+                        linkSaveError = failure.userMessage("Download could not start."),
+                    )
+                }
+            }
+            is CobaltPrepareResult.Picker -> mutableState.update {
+                it.copy(
+                    linkSaveLoading = false,
+                    linkPicker = result,
+                    cobaltChallengeSiteKey = null,
+                )
+            }
+        }
+    }
+
+    private fun handleCobaltRetryResult(
+        operation: CobaltOperation.Retry,
+        result: CobaltPrepareResult,
+    ) {
+        val selection = operation.entry.cobaltRetry?.selection
+        val file = when (result) {
+            is CobaltPrepareResult.File -> result.file
+            is CobaltPrepareResult.Picker -> when {
+                selection?.pickerAudio == true -> result.audio
+                selection?.index != null -> result.items.firstOrNull {
+                    it.selection?.index == selection.index
+                } ?: result.items.firstOrNull { it.mediaType == selection.mediaType }
+                else -> null
+            }
+        } ?: throw IOException("This link now needs a new media selection")
+        store.replaceCobaltDownload(operation.entry, file)
+        cobaltOperation = null
+        refreshDownloads()
+        mutableState.update {
+            it.copy(
+                linkSaveVisible = false,
+                linkSaveLoading = false,
+                linkSaveError = null,
+                cobaltChallengeSiteKey = null,
+                linkRetryTitle = null,
+                notice = "Download restarted with a fresh link",
+            )
+        }
+    }
+
+    private fun finishNewLinkSave(saved: Int, failed: Int = 0) {
+        cobaltOperation = null
+        refreshDownloads()
+        mutableState.update {
+            it.copy(
+                linkSaveVisible = false,
+                linkSaveUrl = "",
+                linkSaveLoading = false,
+                linkSaveError = null,
+                linkPicker = null,
+                cobaltChallengeSiteKey = null,
+                linkRetryTitle = null,
+                notice = when {
+                    failed > 0 -> "Added $saved items · $failed could not start"
+                    saved == 1 -> "Added saved link to Downloads"
+                    else -> "Added $saved items to Downloads"
+                },
+            )
+        }
+    }
+
     fun download(source: StreamSource) {
         val current = mutableState.value
         val media = current.details?.item ?: current.detailsSeed ?: return
@@ -557,6 +890,16 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
             retrySeasonDownload(entry.batchId)
             return
         }
+        if (entry.isLinkSave) {
+            val request = entry.cobaltRetry?.request
+            if (request == null) {
+                mutableState.update { it.copy(notice = "The original link is no longer available on this device") }
+                return
+            }
+            mutableState.update { it.copy(notice = "Preparing a fresh download link") }
+            startCobaltOperation(CobaltOperation.Retry(entry, request))
+            return
+        }
         viewModelScope.launch {
             mutableState.update { it.copy(notice = "Preparing download retry") }
             runCatching { restartDownloadEntry(entry) }.onSuccess {
@@ -600,6 +943,18 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     fun playDownload(entry: DownloadEntry) {
         if (entry.state != DownloadState.Complete || entry.localUri.isNullOrBlank()) {
             mutableState.update { it.copy(notice = "This download is not ready yet") }
+            return
+        }
+        if (entry.mediaType != DownloadMediaType.Video) {
+            val intent = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(Uri.parse(entry.localUri), entry.mimeType)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            runCatching { getApplication<Application>().startActivity(intent) }
+                .onFailure {
+                    mutableState.update { state ->
+                        state.copy(notice = "No installed app can open this ${entry.mediaType.label.lowercase()}")
+                    }
+                }
             return
         }
         mutableState.update {
@@ -668,7 +1023,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
 
     fun recordProgress(positionMs: Long, durationMs: Long, force: Boolean = false) {
         val media = mutableState.value.playerMedia ?: return
-        if (media.id.startsWith("local:")) return
+        if (media.id.startsWith("local:") || media.id.startsWith("link:")) return
         val now = System.currentTimeMillis()
         if (!force && now - lastProgressWrite < 5_000) return
         lastProgressWrite = now

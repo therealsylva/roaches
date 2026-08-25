@@ -121,6 +121,24 @@ jobs:
             sleep 12
             mkdir -p artifacts/ui
             adb exec-out screencap -p > artifacts/ui/discover.png
+            adb shell am force-stop com.therealsylva.roaches.debug
+            adb shell am start -W -a android.intent.action.SEND -t text/plain \
+              --es android.intent.extra.TEXT https://example.com/media \
+              -n com.therealsylva.roaches.debug/com.therealsylva.roaches.MainActivity
+            sleep 2
+            adb exec-out screencap -p > artifacts/ui/save-link-compact.png
+            adb shell wm size 1600x1200
+            adb shell wm density 240
+            adb shell am force-stop com.therealsylva.roaches.debug
+            adb shell am start -W -a android.intent.action.SEND -t text/plain \
+              --es android.intent.extra.TEXT https://example.com/media \
+              -n com.therealsylva.roaches.debug/com.therealsylva.roaches.MainActivity
+            sleep 2
+            adb exec-out screencap -p > artifacts/ui/save-link-expanded.png
+            adb shell wm size reset
+            adb shell wm density reset
+            adb shell am force-stop com.therealsylva.roaches.debug
+            adb shell am start -W -n com.therealsylva.roaches.debug/com.therealsylva.roaches.MainActivity
             gradle :app:connectedDebugAndroidTest --stacktrace
 
       - uses: actions/upload-artifact@v4

@@ -14,6 +14,8 @@ paywalls.
 - native Media3/ExoPlayer playback, speed, crop, swipe controls and picture-in-picture;
 - saved, liked, recents and continue-watching state stored on device;
 - private app-scoped downloads with progress tracking and offline playback;
+- link saving through Cobalt from a pasted URL or Android's share sheet, with
+  video, audio and image-carousel downloads;
 - local video import through Android's document picker;
 - dark and light themes, audio preference and verified in-app updates;
 - adaptive phone, foldable and tablet layouts;
@@ -41,6 +43,14 @@ updates over an existing installation. Roaches verifies each release checksum
 and package identity before handing it to Android's system installer; Android
 always asks the user to approve installation. Developer debug builds use a
 separate package and require a one-time move to the first stable release.
+
+## Link saving
+
+The Downloads screen can prepare supported public media links through Cobalt's
+hosted API. Roaches uses Cobalt only when a user opens **Save link**, keeps the
+original URL on-device for fresh retry requests and does not bundle Cobalt's
+server, web interface or media tools. Availability and supported services are
+reported dynamically by the Cobalt instance.
 
 ## Quality contract
 
