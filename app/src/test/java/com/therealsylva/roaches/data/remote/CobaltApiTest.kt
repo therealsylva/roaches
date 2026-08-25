@@ -29,32 +29,39 @@ class CobaltApiTest {
     }
 
     @Test
-    fun sessionAndPrepareUseTheStandardCobaltContract() = withServer { server ->
+    fun browserChallengeResponsePreparesMediaAndKeepsTheSessionInMemory() = withServer { server ->
         server.enqueue(jsonResponse(instanceInfo(siteKey = "site-key")))
-        server.enqueue(jsonResponse("""{"token":"jwt-token","exp":120}"""))
         server.enqueue(
             jsonResponse(
-                """{"status":"tunnel","url":"https://files.example/video.mp4","filename":"video.mp4"}""",
+                """{"status":"tunnel","url":"https://files.example/next.mp3","filename":"next.mp3"}""",
             ),
         )
-        val api = CobaltApi(baseUrl = server.url("/"))
+        val api = CobaltApi(baseUrl = server.url("/"), clockSeconds = { 1_000L })
+        val request = CobaltSaveRequest(
+            sourceUrl = "https://media.example/post",
+            mode = LinkDownloadMode.Audio,
+            audioBitrate = LinkAudioBitrate.High,
+        )
+        val browserResult = JSONObject()
+            .put("session", JSONObject().put("token", "jwt-token").put("exp", 120))
+            .put(
+                "response",
+                JSONObject()
+                    .put("status", "tunnel")
+                    .put("url", "https://files.example/audio.mp3")
+                    .put("filename", "audio.mp3"),
+            )
+            .toString()
+
+        val prepared = api.completeBrowserChallenge(request, browserResult) as CobaltPrepareResult.File
+        assertThat(prepared.file.url).isEqualTo("https://files.example/audio.mp3")
+        assertThat(prepared.file.mediaType).isEqualTo(DownloadMediaType.Audio)
 
         runBlocking {
-            api.instanceInfo()
-            api.createSession("turnstile-token")
-            api.prepare(
-                CobaltSaveRequest(
-                    sourceUrl = "https://media.example/post",
-                    mode = LinkDownloadMode.Audio,
-                    audioBitrate = LinkAudioBitrate.High,
-                ),
-            )
+            api.prepare(request.copy(sourceUrl = "https://media.example/next"))
         }
 
         server.takeRequest()
-        val session = server.takeRequest()
-        assertThat(session.path).isEqualTo("/session")
-        assertThat(session.getHeader("cf-turnstile-response")).isEqualTo("turnstile-token")
         val prepare = server.takeRequest()
         assertThat(prepare.path).isEqualTo("/")
         assertThat(prepare.getHeader("Accept")).isEqualTo("application/json")
@@ -62,7 +69,7 @@ class CobaltApiTest {
         assertThat(prepare.getHeader("Authorization")).isEqualTo("Bearer jwt-token")
         assertThat(prepare.getHeader("User-Agent")).doesNotContain("Roaches")
         val body = JSONObject(prepare.body.readUtf8())
-        assertThat(body.getString("url")).isEqualTo("https://media.example/post")
+        assertThat(body.getString("url")).isEqualTo("https://media.example/next")
         assertThat(body.getString("downloadMode")).isEqualTo("audio")
         assertThat(body.getString("audioFormat")).isEqualTo("mp3")
         assertThat(body.getString("audioBitrate")).isEqualTo("320")

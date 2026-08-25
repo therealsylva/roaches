@@ -11,8 +11,6 @@ import com.therealsylva.roaches.data.model.downloadMediaType
 import com.therealsylva.roaches.data.model.downloadMimeType
 import com.therealsylva.roaches.data.model.fallbackCobaltFilename
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -45,7 +43,6 @@ class CobaltApi(
     private data class Session(val token: String, val expiresAt: Long)
     private data class CachedInfo(val value: CobaltInstanceInfo, val expiresAt: Long)
 
-    private val sessionMutex = Mutex()
     @Volatile private var session: Session? = null
     @Volatile private var cachedInfo: CachedInfo? = null
 
@@ -56,22 +53,6 @@ class CobaltApi(
             cachedInfo = CachedInfo(info, now + INSTANCE_CACHE_SECONDS)
             if (info.turnstileSiteKey == null) session = null
         }
-    }
-
-    suspend fun createSession(challengeResponse: String) = sessionMutex.withLock {
-        val responseToken = challengeResponse.trim()
-        require(responseToken.length in 1..MAX_CHALLENGE_LENGTH) { "The connection check was incomplete." }
-        val request = Request.Builder()
-            .url(baseUrl.newBuilder().addPathSegment("session").build())
-            .header("cf-turnstile-response", responseToken)
-            .post(ByteArray(0).toRequestBody(null))
-            .build()
-        val json = executeJson(request)
-        if (json.optString("status") == "error") throw apiFailure(json)
-        val token = json.optString("token").takeIf(String::isNotBlank)
-            ?: throw CobaltApiFailure("error.api.session.invalid", "Cobalt did not open a valid session.")
-        val lifetime = json.optLong("exp").coerceAtLeast(1L)
-        session = Session(token, clockSeconds() + lifetime)
     }
 
     suspend fun prepare(request: CobaltSaveRequest): CobaltPrepareResult {
@@ -95,6 +76,28 @@ class CobaltApi(
         session = null
     }
 
+    fun completeBrowserChallenge(
+        request: CobaltSaveRequest,
+        payload: String,
+    ): CobaltPrepareResult {
+        if (payload.length !in 1..MAX_BROWSER_RESPONSE_LENGTH) {
+            throw CobaltApiFailure("error.api.browser.invalid", "Cobalt returned an invalid browser response.")
+        }
+        val envelope = runCatching { JSONObject(payload) }.getOrNull()
+            ?: throw CobaltApiFailure("error.api.browser.invalid", "Cobalt returned an invalid browser response.")
+        val browserSession = envelope.optJSONObject("session")
+            ?: throw CobaltApiFailure("error.api.session.invalid", "Cobalt did not open a valid session.")
+        if (browserSession.optString("status") == "error") throw apiFailure(browserSession)
+        val token = browserSession.optString("token").takeIf(String::isNotBlank)
+            ?: throw CobaltApiFailure("error.api.session.invalid", "Cobalt did not open a valid session.")
+        val lifetime = browserSession.optLong("exp").coerceAtLeast(1L)
+        session = Session(token, clockSeconds() + lifetime)
+
+        val response = envelope.optJSONObject("response")
+            ?: throw CobaltApiFailure("error.api.response.invalid", "Cobalt returned an invalid media response.")
+        return parsePrepareResponse(response, request)
+    }
+
     private suspend fun requestInstanceInfo(): CobaltInstanceInfo {
         val request = Request.Builder().url(baseUrl).get().build()
         val root = executeJson(request)
@@ -111,20 +114,7 @@ class CobaltApi(
         request: CobaltSaveRequest,
         authorization: String?,
     ): CobaltPrepareResult {
-        val body = JSONObject()
-            .put("url", request.sourceUrl)
-            .put("downloadMode", request.mode.apiValue)
-            .put("filenameStyle", "basic")
-            .put("localProcessing", "disabled")
-            .apply {
-                if (request.mode == LinkDownloadMode.Audio) {
-                    put("audioFormat", "mp3")
-                    put("audioBitrate", request.audioBitrate.apiValue)
-                } else {
-                    put("videoQuality", request.videoQuality.apiValue)
-                }
-            }
-            .toString()
+        val body = cobaltRequestJson(request)
             .toByteArray(Charsets.UTF_8)
             .toRequestBody(JSON_MEDIA_TYPE)
         val builder = Request.Builder()
@@ -133,16 +123,21 @@ class CobaltApi(
             .post(body)
         authorization?.let { builder.header("Authorization", "Bearer $it") }
         val root = executeJson(builder.build())
-        return when (root.optString("status")) {
-            "tunnel", "redirect" -> CobaltPrepareResult.File(root.preparedFile(request))
-            "picker" -> root.preparedPicker(request)
-            "local-processing" -> throw CobaltApiFailure(
-                "error.api.local_processing",
-                "This file needs processing that Roaches does not perform on-device.",
-            )
-            "error" -> throw apiFailure(root)
-            else -> throw CobaltApiFailure("error.api.response.invalid", "Cobalt returned an unknown response.")
-        }
+        return parsePrepareResponse(root, request)
+    }
+
+    private fun parsePrepareResponse(
+        root: JSONObject,
+        request: CobaltSaveRequest,
+    ): CobaltPrepareResult = when (root.optString("status")) {
+        "tunnel", "redirect" -> CobaltPrepareResult.File(root.preparedFile(request))
+        "picker" -> root.preparedPicker(request)
+        "local-processing" -> throw CobaltApiFailure(
+            "error.api.local_processing",
+            "This file needs processing that Roaches does not perform on-device.",
+        )
+        "error" -> throw apiFailure(root)
+        else -> throw CobaltApiFailure("error.api.response.invalid", "Cobalt returned an unknown response.")
     }
 
     private fun JSONObject.preparedFile(request: CobaltSaveRequest): CobaltPreparedFile {
@@ -262,7 +257,7 @@ class CobaltApi(
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
         private const val INSTANCE_CACHE_SECONDS = 300L
         private const val SESSION_EXPIRY_SKEW_SECONDS = 2L
-        private const val MAX_CHALLENGE_LENGTH = 2_048
+        private const val MAX_BROWSER_RESPONSE_LENGTH = 1_048_576
 
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -274,9 +269,28 @@ class CobaltApi(
     }
 }
 
+internal fun cobaltRequestJson(request: CobaltSaveRequest): String = JSONObject()
+    .put("url", request.sourceUrl)
+    .put("downloadMode", request.mode.apiValue)
+    .put("filenameStyle", "basic")
+    .put("localProcessing", "disabled")
+    .apply {
+        if (request.mode == LinkDownloadMode.Audio) {
+            put("audioFormat", "mp3")
+            put("audioBitrate", request.audioBitrate.apiValue)
+        } else {
+            put("videoQuality", request.videoQuality.apiValue)
+        }
+    }
+    .toString()
+
+internal const val COBALT_PUBLIC_API_ORIGIN = "https://api.cobalt.tools"
+
 private fun String.isSessionFailure(): Boolean = this in setOf(
     "error.api.auth.jwt.missing",
     "error.api.auth.jwt.invalid",
+    "error.api.http.401",
+    "error.api.http.403",
 )
 
 private fun isRemoteUrl(value: String): Boolean = runCatching { URI(value) }
