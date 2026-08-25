@@ -89,7 +89,7 @@ jobs:
 
   device:
     name: Android device journey
-    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'codex/roaches-cobalt-save-links'
+    if: github.event_name == 'workflow_dispatch'
     needs: [build, provider]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -113,9 +113,17 @@ jobs:
           api-level: 35
           arch: x86_64
           profile: pixel_6
-          disable-animations: true
           disk-size: 4096M
           script: |
+            adb wait-for-device
+            for scale in window_animation_scale transition_animation_scale animator_duration_scale; do
+              for attempt in 1 2 3; do
+                if adb shell settings put global "$scale" 0; then
+                  break
+                fi
+                sleep 2
+              done
+            done
             gradle :app:installDebug
             adb shell am start -W -n com.therealsylva.roaches.debug/com.therealsylva.roaches.MainActivity
             sleep 12
