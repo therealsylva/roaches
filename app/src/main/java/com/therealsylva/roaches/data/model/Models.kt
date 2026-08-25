@@ -205,11 +205,18 @@ data class DownloadEntry(
     val episodeTitle: String? = null,
     val batchId: String? = null,
     val batchSize: Int = 0,
+    val mediaType: DownloadMediaType = DownloadMediaType.Video,
+    val mimeType: String = "video/*",
+    val cobaltRetryId: String? = null,
+    val cobaltRetry: CobaltRetry? = null,
     val state: DownloadState = DownloadState.Queued,
     val progress: Float = 0f,
     val localUri: String? = null,
     val statusMessage: String? = null,
 ) {
+    val isLinkSave: Boolean
+        get() = cobaltRetryId != null
+
     val targetKey: String
         get() = downloadTargetKey(media.id, season, episode)
 }

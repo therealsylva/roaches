@@ -18,7 +18,7 @@ class RoachesNavigationTest {
 
     @Test
     fun primaryDestinationsAndSettingsAreReachable() {
-        compose.onNodeWithContentDescription("Discover").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Home").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Home feed region").assertIsDisplayed()
         compose.onNodeWithContentDescription("Back").performClick()
@@ -28,6 +28,16 @@ class RoachesNavigationTest {
         compose.onNodeWithText("Library").assertIsDisplayed()
         compose.onNodeWithContentDescription("Downloads").performClick()
         compose.onNodeWithText("Downloads").assertIsDisplayed()
+    }
+
+    @Test
+    fun saveLinkLivesInsideDownloads() {
+        compose.onNodeWithContentDescription("Downloads").performClick()
+        compose.onNodeWithText("Save link").performClick()
+
+        compose.onNodeWithText("Save a media link").assertIsDisplayed()
+        compose.onNodeWithText("Media link").assertIsDisplayed()
+        compose.onNodeWithText("Video quality").assertIsDisplayed()
     }
 
     @Test

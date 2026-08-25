@@ -5,12 +5,20 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import com.therealsylva.roaches.data.model.AppSettings
+import com.therealsylva.roaches.data.model.CobaltPickerSelection
+import com.therealsylva.roaches.data.model.CobaltPreparedFile
+import com.therealsylva.roaches.data.model.CobaltRetry
+import com.therealsylva.roaches.data.model.CobaltSaveRequest
 import com.therealsylva.roaches.data.model.ContentRegion
 import com.therealsylva.roaches.data.model.DownloadEntry
+import com.therealsylva.roaches.data.model.DownloadMediaType
 import com.therealsylva.roaches.data.model.DownloadPreference
 import com.therealsylva.roaches.data.model.DownloadState
 import com.therealsylva.roaches.data.model.Episode
 import com.therealsylva.roaches.data.model.LocalMediaEntry
+import com.therealsylva.roaches.data.model.LinkAudioBitrate
+import com.therealsylva.roaches.data.model.LinkDownloadMode
+import com.therealsylva.roaches.data.model.LinkVideoQuality
 import com.therealsylva.roaches.data.model.MediaItem
 import com.therealsylva.roaches.data.model.MediaKind
 import com.therealsylva.roaches.data.model.PlaybackQuality
@@ -20,6 +28,7 @@ import com.therealsylva.roaches.data.model.SeasonDownloadTask
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.WatchEntry
+import com.therealsylva.roaches.data.model.cobaltDisplayTitle
 import com.therealsylva.roaches.data.remote.ClientIdentity
 import org.json.JSONArray
 import org.json.JSONObject
@@ -92,19 +101,74 @@ internal fun seasonRetryAvailable(
 internal fun resolvedDownloadUri(status: Int, cursorUri: String?, managerUri: String?): String? {
     val stored = cursorUri?.takeIf(String::isNotBlank)
     if (status != DownloadManager.STATUS_SUCCESSFUL) return stored
-    return stored ?: managerUri?.takeIf(String::isNotBlank)
+    return managerUri?.takeIf(String::isNotBlank) ?: stored
 }
+
+internal fun safeCobaltFilename(filename: String, mediaType: DownloadMediaType): String {
+    val rawName = filename
+        .substringBefore('?')
+        .substringBefore('#')
+        .substringAfterLast('/')
+        .replace(Regex("[^\\p{L}\\p{N}._ -]"), "")
+        .trim()
+        .trimEnd('.', ' ')
+        .take(180)
+    val fallbackExtension = when (mediaType) {
+        DownloadMediaType.Video -> "mp4"
+        DownloadMediaType.Audio -> "mp3"
+        DownloadMediaType.Image -> "jpg"
+        DownloadMediaType.Gif -> "gif"
+    }
+    val normalized = rawName.ifBlank { "saved-link.$fallbackExtension" }
+    return if (normalized.substringAfterLast('.', "").lowercase(Locale.US) in COBALT_MEDIA_EXTENSIONS) {
+        normalized
+    } else {
+        "${normalized.substringBeforeLast('.', normalized)}.$fallbackExtension"
+    }
+}
+
+private fun cobaltStreamSource(
+    request: CobaltSaveRequest,
+    file: CobaltPreparedFile,
+): StreamSource {
+    val extension = file.filename.substringAfterLast('.', "")
+        .take(8)
+        .uppercase(Locale.US)
+        .takeIf(String::isNotBlank)
+    return StreamSource(
+        resourceId = "cobalt",
+        url = file.url,
+        resolution = if (file.mediaType == DownloadMediaType.Video) request.videoQuality.height else 0,
+        codec = extension,
+        audio = if (file.mediaType == DownloadMediaType.Audio) request.audioBitrate.label else null,
+        filename = file.filename,
+    )
+}
+
+private fun DownloadMediaType.externalDirectory(): String = when (this) {
+    DownloadMediaType.Video -> Environment.DIRECTORY_MOVIES
+    DownloadMediaType.Audio -> Environment.DIRECTORY_MUSIC
+    DownloadMediaType.Image, DownloadMediaType.Gif -> Environment.DIRECTORY_PICTURES
+}
+
+private val COBALT_MEDIA_EXTENSIONS = setOf(
+    "mp4", "mkv", "webm", "m4v", "mov", "ts",
+    "mp3", "m4a", "ogg", "opus", "wav",
+    "jpg", "jpeg", "png", "webp", "gif",
+)
 
 class LocalStore(context: Context) {
     companion object {
         private const val PROVIDER_IP_PREFIX = "103.241"
         private const val SEASON_DOWNLOAD_QUEUE = "season_download_queue_v1"
+        private const val COBALT_RETRIES = "cobalt_retries_v1"
         private const val MAX_SEASON_ATTEMPTS = 3
         private val DOWNLOAD_LOCK = Any()
     }
 
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences("roaches_local", Context.MODE_PRIVATE)
+    private val privatePreferences = appContext.getSharedPreferences("roaches_private", Context.MODE_PRIVATE)
 
     internal fun clientIdentity(): ClientIdentity {
         val installId = valueOrCreate("install_id") { UUID.randomUUID().toString() }
@@ -331,11 +395,45 @@ class LocalStore(context: Context) {
         enqueueDownloadLocked(media, source, episode)
     }
 
+    fun enqueueCobaltDownload(
+        request: CobaltSaveRequest,
+        file: CobaltPreparedFile,
+    ): DownloadEntry = synchronized(DOWNLOAD_LOCK) {
+        val retryId = UUID.randomUUID().toString()
+        val retry = CobaltRetry(request, file.selection)
+        val media = MediaItem(
+            id = "link:${UUID.randomUUID()}",
+            title = cobaltDisplayTitle(file.filename, request.sourceUrl),
+            kind = MediaKind.Movie,
+            posterUrl = file.thumbnailUrl,
+            backdropUrl = file.thumbnailUrl,
+            description = "Saved link",
+        )
+        val entry = enqueueNativeDownload(
+            media = media,
+            source = cobaltStreamSource(request, file),
+            seasonNumber = 0,
+            episodeNumber = 0,
+            episodeTitle = null,
+            batchId = null,
+            batchSize = 0,
+            mediaType = file.mediaType,
+            mimeType = file.mimeType,
+            cobaltRetryId = retryId,
+            cobaltRetry = retry,
+            filenameOverride = safeCobaltFilename(file.filename, file.mediaType),
+        )
+        writeCobaltRetry(retryId, retry)
+        writeDownloads(listOf(entry) + storedDownloads())
+        entry
+    }
+
     fun replaceDownload(entry: DownloadEntry, source: StreamSource): DownloadEntry =
         synchronized(DOWNLOAD_LOCK) {
             val stored = storedDownloads()
             val persisted = stored.firstOrNull { it.downloadId == entry.downloadId }
                 ?: error("This download has changed. Refresh Downloads and try again.")
+            check(!persisted.isLinkSave) { "This saved link needs a fresh Cobalt result." }
             check(shouldRequeueDownload(queryDownload(persisted).state)) {
                 "This download is already running or complete."
             }
@@ -356,6 +454,44 @@ class LocalStore(context: Context) {
             writeDownloads(listOf(replacement) + stored.filterNot { it.downloadId == persisted.downloadId })
             replacement
         }
+
+    fun replaceCobaltDownload(
+        entry: DownloadEntry,
+        file: CobaltPreparedFile,
+    ): DownloadEntry = synchronized(DOWNLOAD_LOCK) {
+        val stored = storedDownloads()
+        val persisted = stored.firstOrNull { it.downloadId == entry.downloadId }
+            ?: error("This download has changed. Refresh Downloads and try again.")
+        val retryId = persisted.cobaltRetryId
+            ?: error("The original link is no longer available on this device.")
+        val retry = persisted.cobaltRetry
+            ?: error("The original link is no longer available on this device.")
+        check(shouldRequeueDownload(queryDownload(persisted).state)) {
+            "This download is already running or complete."
+        }
+        appContext.getSystemService(DownloadManager::class.java).remove(persisted.downloadId)
+        val source = cobaltStreamSource(retry.request, file)
+        val replacement = enqueueNativeDownload(
+            media = persisted.media.copy(
+                title = cobaltDisplayTitle(file.filename, retry.request.sourceUrl),
+                posterUrl = file.thumbnailUrl ?: persisted.media.posterUrl,
+                backdropUrl = file.thumbnailUrl ?: persisted.media.backdropUrl,
+            ),
+            source = source,
+            seasonNumber = 0,
+            episodeNumber = 0,
+            episodeTitle = null,
+            batchId = null,
+            batchSize = 0,
+            mediaType = file.mediaType,
+            mimeType = file.mimeType,
+            cobaltRetryId = retryId,
+            cobaltRetry = retry,
+            filenameOverride = safeCobaltFilename(file.filename, file.mediaType),
+        )
+        writeDownloads(listOf(replacement) + stored.filterNot { it.downloadId == persisted.downloadId })
+        replacement
+    }
 
     private fun enqueueDownloadLocked(
         media: MediaItem,
@@ -402,6 +538,11 @@ class LocalStore(context: Context) {
         episodeTitle: String?,
         batchId: String?,
         batchSize: Int,
+        mediaType: DownloadMediaType = DownloadMediaType.Video,
+        mimeType: String = "video/*",
+        cobaltRetryId: String? = null,
+        cobaltRetry: CobaltRetry? = null,
+        filenameOverride: String? = null,
     ): DownloadEntry {
         val episodeSuffix = if (seasonNumber > 0 && episodeNumber > 0) {
             "-S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}"
@@ -411,15 +552,15 @@ class LocalStore(context: Context) {
         val episodeLabel = if (episodeSuffix.isBlank()) "" else " · S$seasonNumber E$episodeNumber"
         val request = DownloadManager.Request(Uri.parse(source.url))
             .setTitle(media.title + episodeLabel)
-            .setDescription("${source.qualityLabel} · Roaches")
-            .setMimeType("video/*")
-            .setAllowedOverMetered(!settings().wifiOnlyDownloads)
+            .setDescription(if (cobaltRetryId == null) "${source.qualityLabel} · Roaches" else "Saved link · Roaches")
+            .setMimeType(mimeType)
+            .setAllowedOverMetered(cobaltRetryId != null || !settings().wifiOnlyDownloads)
             .setAllowedOverRoaming(false)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(
                 appContext,
-                Environment.DIRECTORY_MOVIES,
-                downloadFileName(media.title, seasonNumber, episodeNumber, source),
+                mediaType.externalDirectory(),
+                filenameOverride ?: downloadFileName(media.title, seasonNumber, episodeNumber, source),
             )
         val downloadId = appContext.getSystemService(DownloadManager::class.java).enqueue(request)
         return DownloadEntry(
@@ -432,11 +573,16 @@ class LocalStore(context: Context) {
             episodeTitle = episodeTitle,
             batchId = batchId,
             batchSize = batchSize,
+            mediaType = mediaType,
+            mimeType = mimeType,
+            cobaltRetryId = cobaltRetryId,
+            cobaltRetry = cobaltRetry,
         )
     }
 
     fun removeDownload(entry: DownloadEntry) = synchronized(DOWNLOAD_LOCK) {
         appContext.getSystemService(DownloadManager::class.java).remove(entry.downloadId)
+        entry.cobaltRetryId?.let(::removeCobaltRetry)
         val remaining = storedDownloads().filterNot { it.downloadId == entry.downloadId }
         val batchId = entry.batchId
         if (batchId == null) {
@@ -562,9 +708,7 @@ class LocalStore(context: Context) {
                 )
                 val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
                 val cursorUri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
-                val managerUri = if (
-                    status == DownloadManager.STATUS_SUCCESSFUL && cursorUri.isNullOrBlank()
-                ) {
+                val managerUri = if (status == DownloadManager.STATUS_SUCCESSFUL) {
                     runCatching { manager.getUriForDownloadedFile(entry.downloadId)?.toString() }
                         .getOrNull()
                 } else {
@@ -588,9 +732,13 @@ class LocalStore(context: Context) {
         }.getOrDefault(entry.copy(state = DownloadState.Missing, statusMessage = "File unavailable"))
     }
 
-    private fun storedDownloads(): List<DownloadEntry> = decodeDownloadEntries(
-        preferences.getString("downloads", null),
-    )
+    private fun storedDownloads(): List<DownloadEntry> {
+        val retries = cobaltRetries()
+        return decodeDownloadEntries(preferences.getString("downloads", null)).map { entry ->
+            val retry = entry.cobaltRetryId?.let(retries::get)
+            if (retry == null) entry else entry.copy(cobaltRetry = retry)
+        }
+    }
 
     private fun writeDownloads(downloads: List<DownloadEntry>) {
         preferences.edit().putString("downloads", encodeDownloadEntries(downloads)).apply()
@@ -598,6 +746,22 @@ class LocalStore(context: Context) {
 
     private fun writeSeasonDownloadTasks(tasks: List<SeasonDownloadTask>) {
         preferences.edit().putString(SEASON_DOWNLOAD_QUEUE, encodeSeasonDownloadTasks(tasks)).apply()
+    }
+
+    private fun cobaltRetries(): Map<String, CobaltRetry> = decodeCobaltRetries(
+        privatePreferences.getString(COBALT_RETRIES, null),
+    )
+
+    private fun writeCobaltRetry(id: String, retry: CobaltRetry) {
+        privatePreferences.edit()
+            .putString(COBALT_RETRIES, encodeCobaltRetries(cobaltRetries() + (id to retry)))
+            .apply()
+    }
+
+    private fun removeCobaltRetry(id: String) {
+        privatePreferences.edit()
+            .putString(COBALT_RETRIES, encodeCobaltRetries(cobaltRetries() - id))
+            .apply()
     }
 
     private fun valueOrCreate(key: String, create: () -> String): String {
@@ -730,13 +894,21 @@ private fun streamFromJson(json: JSONObject): StreamSource? {
 private fun downloadToJson(entry: DownloadEntry) = JSONObject()
     .put("id", entry.downloadId)
     .put("media", mediaToJson(entry.media))
-    .put("source", streamToJson(entry.source))
+    .put(
+        "source",
+        streamToJson(
+            if (entry.cobaltRetryId == null) entry.source else entry.source.copy(url = "cobalt://prepared-link"),
+        ),
+    )
     .put("created", entry.createdAt)
     .put("season", entry.season)
     .put("episode", entry.episode)
     .put("episodeTitle", entry.episodeTitle)
     .put("batch", entry.batchId)
     .put("batchSize", entry.batchSize)
+    .put("mediaType", entry.mediaType.name)
+    .put("mimeType", entry.mimeType)
+    .put("cobaltRetryId", entry.cobaltRetryId)
 
 private fun downloadFromJson(json: JSONObject): DownloadEntry? {
     val media = json.optJSONObject("media")?.let(::mediaFromJson) ?: return null
@@ -751,6 +923,10 @@ private fun downloadFromJson(json: JSONObject): DownloadEntry? {
         episodeTitle = json.nullableString("episodeTitle"),
         batchId = json.nullableString("batch"),
         batchSize = json.optInt("batchSize"),
+        mediaType = runCatching { DownloadMediaType.valueOf(json.optString("mediaType")) }
+            .getOrDefault(DownloadMediaType.Video),
+        mimeType = json.optString("mimeType").takeIf(String::isNotBlank) ?: "video/*",
+        cobaltRetryId = json.nullableString("cobaltRetryId"),
     )
 }
 
@@ -760,6 +936,51 @@ internal fun encodeDownloadEntries(entries: List<DownloadEntry>): String =
 internal fun decodeDownloadEntries(raw: String?): List<DownloadEntry> = runCatching {
     JSONArray(raw ?: "[]").objects().mapNotNull(::downloadFromJson)
 }.getOrDefault(emptyList())
+
+private fun cobaltRetryToJson(retry: CobaltRetry) = JSONObject()
+    .put("url", retry.request.sourceUrl)
+    .put("mode", retry.request.mode.name)
+    .put("videoQuality", retry.request.videoQuality.name)
+    .put("audioBitrate", retry.request.audioBitrate.name)
+    .put("pickerIndex", retry.selection?.index)
+    .put("mediaType", retry.selection?.mediaType?.name)
+    .put("pickerAudio", retry.selection?.pickerAudio ?: false)
+
+private fun cobaltRetryFromJson(json: JSONObject): CobaltRetry? {
+    val sourceUrl = json.optString("url").takeIf(String::isNotBlank) ?: return null
+    val request = CobaltSaveRequest(
+        sourceUrl = sourceUrl,
+        mode = runCatching { LinkDownloadMode.valueOf(json.optString("mode")) }
+            .getOrDefault(LinkDownloadMode.Video),
+        videoQuality = runCatching { LinkVideoQuality.valueOf(json.optString("videoQuality")) }
+            .getOrDefault(LinkVideoQuality.FullHd),
+        audioBitrate = runCatching { LinkAudioBitrate.valueOf(json.optString("audioBitrate")) }
+            .getOrDefault(LinkAudioBitrate.Standard),
+    )
+    val mediaType = json.nullableString("mediaType")
+        ?.let { value -> runCatching { DownloadMediaType.valueOf(value) }.getOrNull() }
+    val selection = mediaType?.let {
+        CobaltPickerSelection(
+            index = json.optInt("pickerIndex").takeIf { json.has("pickerIndex") && !json.isNull("pickerIndex") },
+            mediaType = it,
+            pickerAudio = json.optBoolean("pickerAudio"),
+        )
+    }
+    return CobaltRetry(request, selection)
+}
+
+internal fun encodeCobaltRetries(retries: Map<String, CobaltRetry>): String = JSONObject().apply {
+    retries.forEach { (id, retry) -> put(id, cobaltRetryToJson(retry)) }
+}.toString()
+
+internal fun decodeCobaltRetries(raw: String?): Map<String, CobaltRetry> = runCatching {
+    val root = JSONObject(raw ?: "{}")
+    buildMap {
+        root.keys().forEach { id ->
+            root.optJSONObject(id)?.let(::cobaltRetryFromJson)?.let { put(id, it) }
+        }
+    }
+}.getOrDefault(emptyMap())
 
 private fun seasonDownloadTaskToJson(task: SeasonDownloadTask) = JSONObject()
     .put("id", task.id)

@@ -2,7 +2,11 @@ package com.therealsylva.roaches.data.local
 
 import android.app.DownloadManager
 import com.google.common.truth.Truth.assertThat
+import com.therealsylva.roaches.data.model.CobaltPickerSelection
+import com.therealsylva.roaches.data.model.CobaltRetry
+import com.therealsylva.roaches.data.model.CobaltSaveRequest
 import com.therealsylva.roaches.data.model.DownloadEntry
+import com.therealsylva.roaches.data.model.DownloadMediaType
 import com.therealsylva.roaches.data.model.DownloadPreference
 import com.therealsylva.roaches.data.model.DownloadState
 import com.therealsylva.roaches.data.model.Episode
@@ -68,6 +72,36 @@ class SeasonDownloadCodecTest {
     }
 
     @Test
+    fun savedLinkCodecSeparatesRetrySecretsFromBackedUpMetadata() {
+        val retry = CobaltRetry(
+            request = CobaltSaveRequest("https://social.example/private-post"),
+            selection = CobaltPickerSelection(2, DownloadMediaType.Image),
+        )
+        val entry = DownloadEntry(
+            downloadId = 14L,
+            media = media.copy(id = "link:14", title = "Saved photo"),
+            source = source.copy(url = "https://signed.example/file?token=secret"),
+            createdAt = 42L,
+            mediaType = DownloadMediaType.Image,
+            mimeType = "image/jpeg",
+            cobaltRetryId = "retry-14",
+            cobaltRetry = retry,
+        )
+
+        val publicJson = encodeDownloadEntries(listOf(entry))
+        val decodedEntry = decodeDownloadEntries(publicJson).single()
+        val privateJson = encodeCobaltRetries(mapOf("retry-14" to retry))
+
+        assertThat(publicJson).doesNotContain("private-post")
+        assertThat(publicJson).doesNotContain("token=secret")
+        assertThat(decodedEntry.source.url).isEqualTo("cobalt://prepared-link")
+        assertThat(decodedEntry.mediaType).isEqualTo(DownloadMediaType.Image)
+        assertThat(decodedEntry.mimeType).isEqualTo("image/jpeg")
+        assertThat(decodedEntry.cobaltRetry).isNull()
+        assertThat(decodeCobaltRetries(privateJson)).containsExactly("retry-14", retry)
+    }
+
+    @Test
     fun malformedQueueRowsAreIgnored() {
         assertThat(decodeSeasonDownloadTasks("not-json")).isEmpty()
         assertThat(decodeSeasonDownloadTasks("[{}]")).isEmpty()
@@ -124,7 +158,7 @@ class SeasonDownloadCodecTest {
                 cursorUri = "file:///movie.mp4",
                 managerUri = "content://downloads/9",
             ),
-        ).isEqualTo("file:///movie.mp4")
+        ).isEqualTo("content://downloads/9")
     }
 
     @Test
