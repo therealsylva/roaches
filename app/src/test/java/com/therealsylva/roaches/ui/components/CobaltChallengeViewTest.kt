@@ -18,12 +18,16 @@ class CobaltChallengeViewTest {
 
         val sessionRequest = document.indexOf("fetch(apiOrigin + '/session'")
         val mediaRequest = document.indexOf("fetch(apiOrigin + '/'")
+        val progress = document.indexOf("window.RoachesTurnstile.progress()")
 
+        assertThat(progress).isAtLeast(0)
+        assertThat(sessionRequest).isGreaterThan(progress)
         assertThat(sessionRequest).isAtLeast(0)
         assertThat(mediaRequest).isGreaterThan(sessionRequest)
         assertThat(document).contains("'cf-turnstile-response': challengeResponse")
         assertThat(document).contains("'Authorization': 'Bearer ' + session.token")
         assertThat(document).contains("downloadMode")
+        assertThat(document).contains("appearance: 'interaction-only'")
         assertThat(document).doesNotContain("Roaches/")
     }
 }

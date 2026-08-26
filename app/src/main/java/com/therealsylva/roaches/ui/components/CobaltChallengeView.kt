@@ -28,11 +28,13 @@ fun CobaltChallengeView(
     siteKey: String,
     request: CobaltSaveRequest,
     nonce: Int,
+    onProgress: () -> Unit,
     onResult: (String) -> Unit,
     onError: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val currentOnProgress = rememberUpdatedState(onProgress)
     val currentOnResult = rememberUpdatedState(onResult)
     val currentOnError = rememberUpdatedState(onError)
     val webView = remember(siteKey, request, nonce) {
@@ -49,6 +51,7 @@ fun CobaltChallengeView(
             addJavascriptInterface(
                 TurnstileBridge(
                     webView = this,
+                    onProgress = { currentOnProgress.value() },
                     onResult = { currentOnResult.value(it) },
                     onError = { currentOnError.value(it) },
                 ),
@@ -88,9 +91,15 @@ fun CobaltChallengeView(
 
 private class TurnstileBridge(
     private val webView: WebView,
+    private val onProgress: () -> Unit,
     private val onResult: (String) -> Unit,
     private val onError: (String) -> Unit,
 ) {
+    @JavascriptInterface
+    fun progress() {
+        webView.post(onProgress)
+    }
+
     @JavascriptInterface
     fun result(value: String) {
         if (value.length !in 1..MAX_BROWSER_RESULT_LENGTH) {
@@ -143,6 +152,7 @@ internal fun turnstileDocument(siteKey: String, request: CobaltSaveRequest): Str
             async function prepareLink(challengeResponse) {
               if (submitting) return;
               submitting = true;
+              window.$BRIDGE_NAME.progress();
               try {
                 const sessionResponse = await fetch(apiOrigin + '/session', {
                   method: 'POST',
@@ -182,6 +192,7 @@ internal fun turnstileDocument(siteKey: String, request: CobaltSaveRequest): Str
               window.turnstile.render('#challenge', {
                 sitekey: $safeSiteKey,
                 theme: 'dark',
+                appearance: 'interaction-only',
                 retry: 'auto',
                 'retry-interval': 800,
                 'refresh-expired': 'never',

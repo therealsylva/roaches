@@ -99,6 +99,7 @@ fun DownloadsScreen(
     onLinkVideoQuality: (LinkVideoQuality) -> Unit,
     onLinkAudioBitrate: (LinkAudioBitrate) -> Unit,
     onSubmitLink: () -> Unit,
+    onChallengeProgress: () -> Unit,
     onChallengeResult: (String) -> Unit,
     onChallengeError: (String) -> Unit,
     onRetryChallenge: () -> Unit,
@@ -185,6 +186,7 @@ fun DownloadsScreen(
                 onVideoQuality = onLinkVideoQuality,
                 onAudioBitrate = onLinkAudioBitrate,
                 onSubmit = onSubmitLink,
+                onChallengeProgress = onChallengeProgress,
                 onChallengeResult = onChallengeResult,
                 onChallengeError = onChallengeError,
                 onRetryChallenge = onRetryChallenge,
@@ -215,6 +217,7 @@ private fun LinkSaveSheet(
     onVideoQuality: (LinkVideoQuality) -> Unit,
     onAudioBitrate: (LinkAudioBitrate) -> Unit,
     onSubmit: () -> Unit,
+    onChallengeProgress: () -> Unit,
     onChallengeResult: (String) -> Unit,
     onChallengeError: (String) -> Unit,
     onRetryChallenge: () -> Unit,
@@ -234,6 +237,7 @@ private fun LinkSaveSheet(
                 retryTitle = retryTitle,
                 loading = loading,
                 error = error,
+                onProgress = onChallengeProgress,
                 onResult = onChallengeResult,
                 onError = onChallengeError,
                 onRetry = onRetryChallenge,
@@ -389,6 +393,7 @@ private fun CobaltChallengeContent(
     retryTitle: String?,
     loading: Boolean,
     error: String?,
+    onProgress: () -> Unit,
     onResult: (String) -> Unit,
     onError: (String) -> Unit,
     onRetry: () -> Unit,
@@ -402,13 +407,17 @@ private fun CobaltChallengeContent(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(RoachesSpacing.xs)) {
             Text(
-                retryTitle?.let { "Refresh $it" } ?: "Connect to Cobalt",
+                retryTitle?.let { "Refreshing $it" } ?: "Preparing download",
                 style = MaterialTheme.typography.headlineMedium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "Complete Cobalt's connection check to prepare this link.",
+                if (loading) {
+                    "Roaches is preparing your link. Keep this open for a moment."
+                } else {
+                    "The connection check runs automatically. Complete the box only if Cloudflare shows one."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = RoachesColors.InkMuted,
             )
@@ -417,18 +426,22 @@ private fun CobaltChallengeContent(
             siteKey = siteKey,
             request = request,
             nonce = nonce,
+            onProgress = onProgress,
             onResult = onResult,
             onError = onError,
             modifier = Modifier.fillMaxWidth().height(96.dp),
         )
-        if (loading) {
+        if (error == null) {
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
             ) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text("Preparing link", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    if (loading) "Preparing link" else "Checking connection",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
         }
         error?.let {

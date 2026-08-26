@@ -242,6 +242,7 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                     onLinkVideoQuality = viewModel::setLinkVideoQuality,
                     onLinkAudioBitrate = viewModel::setLinkAudioBitrate,
                     onSubmitLink = viewModel::submitLinkSave,
+                    onChallengeProgress = viewModel::cobaltChallengeStarted,
                     onChallengeResult = viewModel::completeCobaltChallenge,
                     onChallengeError = viewModel::cobaltChallengeFailed,
                     onRetryChallenge = viewModel::retryCobaltChallenge,
