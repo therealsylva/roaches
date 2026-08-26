@@ -613,9 +613,14 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun cobaltChallengeStarted() {
+        if (cobaltOperation == null || mutableState.value.cobaltChallengeSiteKey == null) return
+        mutableState.update { it.copy(linkSaveLoading = true, linkSaveError = null) }
+    }
+
     fun completeCobaltChallenge(browserResult: String) {
         val operation = cobaltOperation ?: return
-        if (mutableState.value.linkSaveLoading) return
+        if (cobaltJob?.isActive == true) return
         cobaltJob?.cancel()
         mutableState.update { it.copy(linkSaveLoading = true, linkSaveError = null) }
         cobaltJob = viewModelScope.launch {
@@ -660,6 +665,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     fun retryCobaltChallenge() {
         mutableState.update {
             it.copy(
+                linkSaveLoading = false,
                 linkSaveError = null,
                 cobaltChallengeNonce = it.cobaltChallengeNonce + 1,
             )
