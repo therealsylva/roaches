@@ -98,6 +98,7 @@ data class RoachesUiState(
     val linkSaveError: String? = null,
     val linkPicker: CobaltPrepareResult.Picker? = null,
     val cobaltChallengeSiteKey: String? = null,
+    val cobaltChallengeRequest: CobaltSaveRequest? = null,
     val cobaltChallengeNonce: Int = 0,
     val linkRetryTitle: String? = null,
     val settings: AppSettings = AppSettings(),
@@ -549,6 +550,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 linkSaveError = null,
                 linkPicker = null,
                 cobaltChallengeSiteKey = null,
+                cobaltChallengeRequest = null,
                 linkRetryTitle = null,
             )
         }
@@ -605,22 +607,31 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 linkSaveError = null,
                 linkPicker = null,
                 cobaltChallengeSiteKey = null,
+                cobaltChallengeRequest = null,
                 linkRetryTitle = null,
             )
         }
     }
 
-    fun completeCobaltChallenge(challengeResponse: String) {
+    fun completeCobaltChallenge(browserResult: String) {
         val operation = cobaltOperation ?: return
         if (mutableState.value.linkSaveLoading) return
         cobaltJob?.cancel()
         mutableState.update { it.copy(linkSaveLoading = true, linkSaveError = null) }
         cobaltJob = viewModelScope.launch {
             try {
-                cobaltApi.createSession(challengeResponse)
+                val result = cobaltApi.completeBrowserChallenge(operation.request, browserResult)
                 if (cobaltOperation != operation) return@launch
-                mutableState.update { it.copy(cobaltChallengeSiteKey = null) }
-                runCobaltOperation(operation)
+                mutableState.update {
+                    it.copy(
+                        cobaltChallengeSiteKey = null,
+                        cobaltChallengeRequest = null,
+                    )
+                }
+                when (operation) {
+                    is CobaltOperation.New -> handleNewCobaltResult(operation, result)
+                    is CobaltOperation.Retry -> handleCobaltRetryResult(operation, result)
+                }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (failure: Throwable) {
@@ -692,6 +703,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 linkSaveError = null,
                 linkPicker = null,
                 cobaltChallengeSiteKey = null,
+                cobaltChallengeRequest = null,
                 linkRetryTitle = null,
             )
         }
@@ -706,6 +718,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 linkSaveError = null,
                 linkPicker = null,
                 cobaltChallengeSiteKey = null,
+                cobaltChallengeRequest = null,
                 linkRetryTitle = (operation as? CobaltOperation.Retry)?.entry?.media?.title,
             )
         }
@@ -730,6 +743,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                     linkSaveLoading = false,
                     linkSaveError = null,
                     cobaltChallengeSiteKey = challenge.siteKey,
+                    cobaltChallengeRequest = operation.request,
                     cobaltChallengeNonce = it.cobaltChallengeNonce + 1,
                 )
             }
@@ -743,6 +757,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                         linkSaveLoading = false,
                         linkSaveError = null,
                         cobaltChallengeSiteKey = null,
+                        cobaltChallengeRequest = null,
                         linkRetryTitle = null,
                         notice = failure.userMessage("Download could not be retried."),
                     )
@@ -780,6 +795,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                     linkSaveLoading = false,
                     linkPicker = result,
                     cobaltChallengeSiteKey = null,
+                    cobaltChallengeRequest = null,
                 )
             }
         }
@@ -809,6 +825,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 linkSaveLoading = false,
                 linkSaveError = null,
                 cobaltChallengeSiteKey = null,
+                cobaltChallengeRequest = null,
                 linkRetryTitle = null,
                 notice = "Download restarted with a fresh link",
             )
@@ -826,6 +843,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 linkSaveError = null,
                 linkPicker = null,
                 cobaltChallengeSiteKey = null,
+                cobaltChallengeRequest = null,
                 linkRetryTitle = null,
                 notice = when {
                     failed > 0 -> "Added $saved items · $failed could not start"

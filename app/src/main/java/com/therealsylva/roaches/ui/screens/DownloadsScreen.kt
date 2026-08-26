@@ -61,6 +61,7 @@ import com.therealsylva.roaches.data.model.DownloadMediaType
 import com.therealsylva.roaches.data.model.DownloadState
 import com.therealsylva.roaches.data.model.CobaltPrepareResult
 import com.therealsylva.roaches.data.model.CobaltPreparedFile
+import com.therealsylva.roaches.data.model.CobaltSaveRequest
 import com.therealsylva.roaches.data.model.LinkAudioBitrate
 import com.therealsylva.roaches.data.model.LinkDownloadMode
 import com.therealsylva.roaches.data.model.LinkVideoQuality
@@ -87,6 +88,7 @@ fun DownloadsScreen(
     linkSaveError: String?,
     linkPicker: CobaltPrepareResult.Picker?,
     cobaltChallengeSiteKey: String?,
+    cobaltChallengeRequest: CobaltSaveRequest?,
     cobaltChallengeNonce: Int,
     linkRetryTitle: String?,
     onRefresh: () -> Unit,
@@ -97,7 +99,7 @@ fun DownloadsScreen(
     onLinkVideoQuality: (LinkVideoQuality) -> Unit,
     onLinkAudioBitrate: (LinkAudioBitrate) -> Unit,
     onSubmitLink: () -> Unit,
-    onChallengeToken: (String) -> Unit,
+    onChallengeResult: (String) -> Unit,
     onChallengeError: (String) -> Unit,
     onRetryChallenge: () -> Unit,
     onSavePickerFile: (CobaltPreparedFile) -> Unit,
@@ -174,6 +176,7 @@ fun DownloadsScreen(
                 error = linkSaveError,
                 picker = linkPicker,
                 challengeSiteKey = cobaltChallengeSiteKey,
+                challengeRequest = cobaltChallengeRequest,
                 challengeNonce = cobaltChallengeNonce,
                 retryTitle = linkRetryTitle,
                 onDismiss = onDismissLinkSave,
@@ -182,7 +185,7 @@ fun DownloadsScreen(
                 onVideoQuality = onLinkVideoQuality,
                 onAudioBitrate = onLinkAudioBitrate,
                 onSubmit = onSubmitLink,
-                onChallengeToken = onChallengeToken,
+                onChallengeResult = onChallengeResult,
                 onChallengeError = onChallengeError,
                 onRetryChallenge = onRetryChallenge,
                 onSavePickerFile = onSavePickerFile,
@@ -203,6 +206,7 @@ private fun LinkSaveSheet(
     error: String?,
     picker: CobaltPrepareResult.Picker?,
     challengeSiteKey: String?,
+    challengeRequest: CobaltSaveRequest?,
     challengeNonce: Int,
     retryTitle: String?,
     onDismiss: () -> Unit,
@@ -211,7 +215,7 @@ private fun LinkSaveSheet(
     onVideoQuality: (LinkVideoQuality) -> Unit,
     onAudioBitrate: (LinkAudioBitrate) -> Unit,
     onSubmit: () -> Unit,
-    onChallengeToken: (String) -> Unit,
+    onChallengeResult: (String) -> Unit,
     onChallengeError: (String) -> Unit,
     onRetryChallenge: () -> Unit,
     onSavePickerFile: (CobaltPreparedFile) -> Unit,
@@ -223,13 +227,14 @@ private fun LinkSaveSheet(
         contentColor = RoachesColors.Ink,
     ) {
         when {
-            challengeSiteKey != null -> CobaltChallengeContent(
+            challengeSiteKey != null && challengeRequest != null -> CobaltChallengeContent(
                 siteKey = challengeSiteKey,
+                request = challengeRequest,
                 nonce = challengeNonce,
                 retryTitle = retryTitle,
                 loading = loading,
                 error = error,
-                onToken = onChallengeToken,
+                onResult = onChallengeResult,
                 onError = onChallengeError,
                 onRetry = onRetryChallenge,
             )
@@ -379,11 +384,12 @@ private fun <T> LinkChoiceRow(
 @Composable
 private fun CobaltChallengeContent(
     siteKey: String,
+    request: CobaltSaveRequest,
     nonce: Int,
     retryTitle: String?,
     loading: Boolean,
     error: String?,
-    onToken: (String) -> Unit,
+    onResult: (String) -> Unit,
     onError: (String) -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -402,15 +408,16 @@ private fun CobaltChallengeContent(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "Complete Cobalt's connection check. The session stays in memory and no API key is stored.",
+                "Complete Cobalt's connection check to prepare this link.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = RoachesColors.InkMuted,
             )
         }
         CobaltChallengeView(
             siteKey = siteKey,
+            request = request,
             nonce = nonce,
-            onToken = onToken,
+            onResult = onResult,
             onError = onError,
             modifier = Modifier.fillMaxWidth().height(96.dp),
         )
@@ -421,7 +428,7 @@ private fun CobaltChallengeContent(
                 horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
             ) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text("Opening Cobalt session", style = MaterialTheme.typography.bodyMedium)
+                Text("Preparing link", style = MaterialTheme.typography.bodyMedium)
             }
         }
         error?.let {
