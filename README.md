@@ -1,9 +1,16 @@
+<p align="center">
+  <img src="docs/assets/roaches-banner.webp" alt="Roaches cockroach mascot" width="100%">
+</p>
+
 # Roaches
 
-Roaches is an original, source-built Android client for browsing and playing
-community-indexed film and television streams. It is intentionally free of
-advertising SDKs, analytics, attribution code, accounts, subscriptions and
-paywalls.
+Roaches is a compact native Android client for browsing and playing
+community-indexed film and television streams, saving supported public media
+links and keeping an offline library on-device. The signed APK is about 3 MB
+and intentionally contains no advertising SDKs, analytics, attribution code,
+accounts, subscriptions or paywalls.
+
+[Download the latest signed APK](https://github.com/therealsylva/roaches/releases/latest)
 
 ## Product surface
 
@@ -50,7 +57,10 @@ The Downloads screen can prepare supported public media links through Cobalt's
 hosted API. Roaches uses Cobalt only when a user opens **Save link**, keeps the
 original URL on-device for fresh retry requests and does not bundle Cobalt's
 server, web interface or media tools. Availability and supported services are
-reported dynamically by the Cobalt instance.
+reported dynamically by the Cobalt instance. The connection check runs
+automatically and appears only when Cloudflare requires interaction. Once a
+file is queued, Android's download service can finish it even after Roaches is
+closed.
 
 ## Quality contract
 
