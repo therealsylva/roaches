@@ -13,12 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -56,7 +52,6 @@ fun SettingsScreen(
     updateLoading: Boolean,
     updateMessage: String?,
     updateAvailable: Boolean,
-    onBack: () -> Unit,
     onRegion: (ContentRegion) -> Unit,
     onQuality: (PlaybackQuality) -> Unit,
     onAudio: (PreferredAudio) -> Unit,
@@ -119,13 +114,10 @@ fun SettingsScreen(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = RoachesSpacing.xxs, end = RoachesSpacing.md, top = RoachesSpacing.xs),
+                .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Rounded.ArrowBack, contentDescription = "Back")
-            }
             Text("Settings", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.weight(1f))
             RoachesWordmark()

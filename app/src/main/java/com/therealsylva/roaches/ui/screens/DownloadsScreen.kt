@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Movie
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -48,15 +50,25 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 import com.therealsylva.roaches.data.model.DownloadEntry
 import com.therealsylva.roaches.data.model.DownloadMediaType
 import com.therealsylva.roaches.data.model.DownloadState
@@ -107,6 +119,7 @@ fun DownloadsScreen(
     onSavePickerFile: (CobaltPreparedFile) -> Unit,
     onSaveAllPickerFiles: () -> Unit,
     onRemove: (DownloadEntry) -> Unit,
+    onRename: (DownloadEntry, String) -> Unit,
     onPlay: (DownloadEntry) -> Unit,
     onShare: (DownloadEntry) -> Unit,
     onRetry: (DownloadEntry) -> Unit,
@@ -114,6 +127,9 @@ fun DownloadsScreen(
     onRetrySeason: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var renameTarget by remember { mutableStateOf<DownloadEntry?>(null) }
+    var renameName by remember { mutableStateOf("") }
+
     LaunchedEffect(Unit) {
         while (true) {
             onRefresh()
@@ -168,6 +184,10 @@ fun DownloadsScreen(
                         entry = entry,
                         onPlay = { onPlay(entry) },
                         onShare = { onShare(entry) },
+                        onRename = {
+                            renameTarget = entry
+                            renameName = entry.visibleName
+                        },
                         onRetry = { onRetry(entry) },
                         onRemove = { onRemove(entry) },
                     )
@@ -200,6 +220,38 @@ fun DownloadsScreen(
                 onRetryChallenge = onRetryChallenge,
                 onSavePickerFile = onSavePickerFile,
                 onSaveAllPickerFiles = onSaveAllPickerFiles,
+            )
+        }
+
+        renameTarget?.let { entry ->
+            AlertDialog(
+                onDismissRequest = { renameTarget = null },
+                title = { Text("Rename file") },
+                text = {
+                    OutlinedTextField(
+                        value = renameName,
+                        onValueChange = { renameName = it.take(160) },
+                        label = { Text("File name") },
+                        supportingText = { Text("The existing file extension is kept.") },
+                        singleLine = true,
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            onRename(entry, renameName)
+                            renameTarget = null
+                        },
+                        enabled = renameName.isNotBlank(),
+                    ) {
+                        Text("Rename")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { renameTarget = null }) {
+                        Text("Cancel")
+                    }
+                },
             )
         }
     }
@@ -631,6 +683,7 @@ private fun DownloadRow(
     entry: DownloadEntry,
     onPlay: () -> Unit,
     onShare: () -> Unit,
+    onRename: () -> Unit,
     onRetry: () -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -646,7 +699,7 @@ private fun DownloadRow(
         DownloadArtwork(entry)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(RoachesSpacing.xs)) {
             Text(
-                entry.media.title,
+                entry.visibleName,
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -685,39 +738,44 @@ private fun DownloadRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = if (entry.state == DownloadState.Failed) RoachesColors.Error else RoachesColors.InkMuted,
             )
-        }
-        Row {
-            if (playable) {
-                IconButton(onClick = onPlay) {
-                    Icon(
-                        if (entry.mediaType == DownloadMediaType.Video) Icons.Rounded.PlayArrow else entry.mediaType.icon(),
-                        contentDescription = if (entry.mediaType == DownloadMediaType.Video) {
-                            "Play download"
-                        } else {
-                            "Open download"
-                        },
-                    )
+            Row(Modifier.padding(top = RoachesSpacing.xs)) {
+                if (playable) {
+                    IconButton(onClick = onPlay) {
+                        Icon(
+                            if (entry.mediaType == DownloadMediaType.Video) Icons.Rounded.PlayArrow else entry.mediaType.icon(),
+                            contentDescription = if (entry.mediaType == DownloadMediaType.Video) {
+                                "Play download"
+                            } else {
+                                "Open download"
+                            },
+                        )
+                    }
                 }
-            }
-            if (entry.canShareVideo) {
-                IconButton(onClick = onShare) {
-                    Icon(Icons.Rounded.Share, contentDescription = "Share downloaded video")
+                if (entry.canShareVideo) {
+                    IconButton(onClick = onShare) {
+                        Icon(Icons.Rounded.Share, contentDescription = "Share downloaded video")
+                    }
                 }
-            }
-            if (entry.state in setOf(DownloadState.Queued, DownloadState.Failed, DownloadState.Missing)) {
-                IconButton(onClick = onRetry) {
-                    Icon(
-                        Icons.Rounded.Refresh,
-                        contentDescription = if (entry.state == DownloadState.Queued) {
-                            "Restart queued download"
-                        } else {
-                            "Retry download"
-                        },
-                    )
+                if (entry.canRenameFile) {
+                    IconButton(onClick = onRename) {
+                        Icon(Icons.Rounded.Edit, contentDescription = "Rename downloaded file")
+                    }
                 }
-            }
-            IconButton(onClick = onRemove) {
-                Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove download")
+                if (entry.state in setOf(DownloadState.Queued, DownloadState.Failed, DownloadState.Missing)) {
+                    IconButton(onClick = onRetry) {
+                        Icon(
+                            Icons.Rounded.Refresh,
+                            contentDescription = if (entry.state == DownloadState.Queued) {
+                                "Restart queued download"
+                            } else {
+                                "Retry download"
+                            },
+                        )
+                    }
+                }
+                IconButton(onClick = onRemove) {
+                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove download")
+                }
             }
         }
     }
@@ -726,6 +784,42 @@ private fun DownloadRow(
 @Composable
 private fun DownloadArtwork(entry: DownloadEntry) {
     val artwork = entry.media.posterUrl ?: entry.media.backdropUrl
+    val isVideo = entry.mediaType == DownloadMediaType.Video
+    val videoUri = entry.localUri.takeIf { isVideo && entry.state == DownloadState.Complete }
+    val artworkModifier = Modifier
+        .width(if (isVideo) 96.dp else 64.dp)
+        .aspectRatio(if (isVideo) 16f / 9f else 1f)
+        .clip(RoachesShapes.Tight)
+        .background(RoachesColors.SurfaceQuiet)
+    Box(artworkModifier, contentAlignment = Alignment.Center) {
+        if (videoUri != null) {
+            val context = LocalContext.current
+            val request = remember(entry.downloadId, videoUri) {
+                ImageRequest.Builder(context)
+                    .data(videoUri)
+                    .videoFrameMillis(1_000)
+                    .build()
+            }
+            SubcomposeAsyncImage(
+                model = request,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (painter.state is AsyncImagePainter.State.Success) {
+                    SubcomposeAsyncImageContent()
+                } else {
+                    DownloadArtworkFallback(artwork, entry.mediaType)
+                }
+            }
+        } else {
+            DownloadArtworkFallback(artwork, entry.mediaType)
+        }
+    }
+}
+
+@Composable
+private fun DownloadArtworkFallback(artwork: String?, mediaType: DownloadMediaType) {
     if (artwork != null) {
         AsyncImage(
             model = artwork,
@@ -733,30 +827,10 @@ private fun DownloadArtwork(entry: DownloadEntry) {
             contentScale = ContentScale.Crop,
             placeholder = ColorPainter(RoachesColors.Scrim),
             error = ColorPainter(RoachesColors.Scrim),
-            modifier = Modifier
-                .width(64.dp)
-                .aspectRatio(if (entry.isLinkSave) 1f else 2f / 3f)
-                .clip(RoachesShapes.Tight)
-                .background(RoachesColors.Scrim),
+            modifier = Modifier.fillMaxSize(),
         )
-    } else if (entry.isLinkSave) {
-        Box(
-            Modifier
-                .size(64.dp)
-                .clip(RoachesShapes.Tight)
-                .background(RoachesColors.SurfaceQuiet),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(entry.mediaType.icon(), contentDescription = null, modifier = Modifier.size(30.dp))
-        }
     } else {
-        Box(
-            Modifier
-                .width(64.dp)
-                .aspectRatio(2f / 3f)
-                .clip(RoachesShapes.Tight)
-                .background(RoachesColors.Scrim),
-        )
+        Icon(mediaType.icon(), contentDescription = null, modifier = Modifier.size(30.dp))
     }
 }
 

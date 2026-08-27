@@ -18,6 +18,7 @@
         tools:node="remove" />
 
     <application
+        android:name=".RoachesApplication"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
