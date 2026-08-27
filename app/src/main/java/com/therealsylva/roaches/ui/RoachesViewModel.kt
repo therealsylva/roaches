@@ -1,6 +1,8 @@
 package com.therealsylva.roaches.ui
 
+import android.app.DownloadManager
 import android.app.Application
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -990,6 +992,33 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 screen = AppScreen.Player,
             )
         }
+    }
+
+    fun shareDownload(entry: DownloadEntry) {
+        if (!entry.canShareVideo) {
+            mutableState.update { it.copy(notice = "This video is not ready to share") }
+            return
+        }
+
+        val application = getApplication<Application>()
+        val shareUri = application.getSystemService(DownloadManager::class.java)
+            .getUriForDownloadedFile(entry.downloadId)
+            ?: Uri.parse(entry.localUri)
+        val shareIntent = Intent(Intent.ACTION_SEND)
+            .setType(entry.mimeType.ifBlank { "video/*" })
+            .putExtra(Intent.EXTRA_STREAM, shareUri)
+            .putExtra(Intent.EXTRA_TITLE, entry.media.title)
+            .setClipData(ClipData.newRawUri(entry.media.title, shareUri))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val chooser = Intent.createChooser(shareIntent, "Share ${entry.media.title}")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+        runCatching { application.startActivity(chooser) }
+            .onFailure {
+                mutableState.update { state ->
+                    state.copy(notice = "No installed app can share this video")
+                }
+            }
     }
 
     fun importLocalMedia(uriValue: String) {

@@ -250,6 +250,7 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                     onSaveAllPickerFiles = viewModel::saveAllCobaltPickerFiles,
                     onRemove = viewModel::removeDownload,
                     onPlay = viewModel::playDownload,
+                    onShare = viewModel::shareDownload,
                     onRetry = viewModel::retryDownload,
                     onCancelSeason = viewModel::cancelSeasonDownload,
                     onRetrySeason = viewModel::retrySeasonDownload,

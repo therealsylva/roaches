@@ -41,4 +41,23 @@ class ModelsTest {
         assertThat(settings.eggsEnabled).isFalse()
         assertThat(settings.matureContentUnlocked).isFalse()
     }
+
+    @Test
+    fun onlyCompletedLocalVideosCanBeShared() {
+        val media = MediaItem("film", "Film", MediaKind.Movie)
+        val source = StreamSource("source", "https://example.invalid/video")
+        val completeVideo = DownloadEntry(
+            downloadId = 1,
+            media = media,
+            source = source,
+            createdAt = 0,
+            state = DownloadState.Complete,
+            localUri = "content://downloads/1",
+        )
+
+        assertThat(completeVideo.canShareVideo).isTrue()
+        assertThat(completeVideo.copy(state = DownloadState.Downloading).canShareVideo).isFalse()
+        assertThat(completeVideo.copy(localUri = null).canShareVideo).isFalse()
+        assertThat(completeVideo.copy(mediaType = DownloadMediaType.Audio).canShareVideo).isFalse()
+    }
 }

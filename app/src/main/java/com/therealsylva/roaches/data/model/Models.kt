@@ -217,6 +217,11 @@ data class DownloadEntry(
     val isLinkSave: Boolean
         get() = cobaltRetryId != null
 
+    val canShareVideo: Boolean
+        get() = mediaType == DownloadMediaType.Video &&
+            state == DownloadState.Complete &&
+            !localUri.isNullOrBlank()
+
     val targetKey: String
         get() = downloadTargetKey(media.id, season, episode)
 }
