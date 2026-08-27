@@ -29,10 +29,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
@@ -86,6 +87,7 @@ import com.therealsylva.roaches.ui.theme.RoachesColors
 import com.therealsylva.roaches.ui.theme.RoachesShapes
 import com.therealsylva.roaches.ui.theme.RoachesSpacing
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,8 +129,10 @@ fun DownloadsScreen(
     onRetrySeason: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var actionTarget by remember { mutableStateOf<DownloadEntry?>(null) }
     var renameTarget by remember { mutableStateOf<DownloadEntry?>(null) }
     var renameName by remember { mutableStateOf("") }
+    var infoTarget by remember { mutableStateOf<DownloadEntry?>(null) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -183,13 +187,7 @@ fun DownloadsScreen(
                     DownloadRow(
                         entry = entry,
                         onPlay = { onPlay(entry) },
-                        onShare = { onShare(entry) },
-                        onRename = {
-                            renameTarget = entry
-                            renameName = entry.visibleName
-                        },
-                        onRetry = { onRetry(entry) },
-                        onRemove = { onRemove(entry) },
+                        onMore = { actionTarget = entry },
                     )
                 }
             }
@@ -220,6 +218,34 @@ fun DownloadsScreen(
                 onRetryChallenge = onRetryChallenge,
                 onSavePickerFile = onSavePickerFile,
                 onSaveAllPickerFiles = onSaveAllPickerFiles,
+            )
+        }
+
+        actionTarget?.let { entry ->
+            DownloadActionsSheet(
+                entry = entry,
+                onDismiss = { actionTarget = null },
+                onShare = {
+                    actionTarget = null
+                    onShare(entry)
+                },
+                onRename = {
+                    actionTarget = null
+                    renameTarget = entry
+                    renameName = entry.visibleName
+                },
+                onInfo = {
+                    actionTarget = null
+                    infoTarget = entry
+                },
+                onRetry = {
+                    actionTarget = null
+                    onRetry(entry)
+                },
+                onDelete = {
+                    actionTarget = null
+                    onRemove(entry)
+                },
             )
         }
 
@@ -254,6 +280,101 @@ fun DownloadsScreen(
                 },
             )
         }
+
+        infoTarget?.let { entry ->
+            DownloadInfoDialog(
+                entry = entry,
+                onDismiss = { infoTarget = null },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadActionsSheet(
+    entry: DownloadEntry,
+    onDismiss: () -> Unit,
+    onShare: () -> Unit,
+    onRename: () -> Unit,
+    onInfo: () -> Unit,
+    onRetry: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = RoachesColors.Surface,
+    ) {
+        Text(
+            downloadDisplayFileName(entry),
+            style = MaterialTheme.typography.titleLarge,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
+        )
+        if (entry.canShareVideo) {
+            DownloadSheetAction(Icons.Rounded.Share, "Share", onShare)
+        }
+        if (entry.canRenameFile) {
+            DownloadSheetAction(Icons.Rounded.Edit, "Rename", onRename)
+        }
+        DownloadSheetAction(Icons.Rounded.Info, "Info", onInfo)
+        if (entry.state in setOf(DownloadState.Queued, DownloadState.Failed, DownloadState.Missing)) {
+            DownloadSheetAction(Icons.Rounded.Refresh, "Retry", onRetry)
+        }
+        DownloadSheetAction(Icons.Rounded.DeleteOutline, "Delete", onDelete, danger = true)
+        Spacer(Modifier.height(RoachesSpacing.lg))
+    }
+}
+
+@Composable
+private fun DownloadSheetAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    danger: Boolean = false,
+) {
+    val color = if (danger) RoachesColors.Error else RoachesColors.Ink
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = 56.dp)
+            .padding(horizontal = RoachesSpacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.md),
+    ) {
+        Icon(icon, contentDescription = null, tint = color)
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = color)
+    }
+}
+
+@Composable
+private fun DownloadInfoDialog(entry: DownloadEntry, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("File info") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(RoachesSpacing.sm)) {
+                DownloadInfoLine("Name", downloadDisplayFileName(entry))
+                DownloadInfoLine("Type", downloadTypeLabel(entry))
+                DownloadInfoLine("Quality", entry.source.qualityLabel)
+                formatBytes(entry.source.sizeBytes)?.let { DownloadInfoLine("Size", it) }
+                DownloadInfoLine("Status", downloadStateLabel(entry))
+                DownloadInfoLine("Storage", "Roaches app folder")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
+}
+
+@Composable
+private fun DownloadInfoLine(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(RoachesSpacing.xxs)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = RoachesColors.InkMuted)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -682,10 +803,7 @@ private fun seasonStatus(batch: SeasonDownloadProgress): String = when {
 private fun DownloadRow(
     entry: DownloadEntry,
     onPlay: () -> Unit,
-    onShare: () -> Unit,
-    onRename: () -> Unit,
-    onRetry: () -> Unit,
-    onRemove: () -> Unit,
+    onMore: () -> Unit,
 ) {
     val playable = entry.state == DownloadState.Complete && !entry.localUri.isNullOrBlank()
     Row(
@@ -694,30 +812,22 @@ private fun DownloadRow(
             .clickable(enabled = playable, onClick = onPlay)
             .padding(horizontal = RoachesSpacing.md, vertical = RoachesSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.md),
+        horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.sm),
     ) {
         DownloadArtwork(entry)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(RoachesSpacing.xs)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(RoachesSpacing.xxs)) {
             Text(
                 entry.visibleName,
                 style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (entry.season > 0 && entry.episode > 0) {
-                Text(
-                    "S${entry.season} E${entry.episode} · ${entry.episodeTitle ?: "Episode ${entry.episode}"}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = RoachesColors.InkMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
             Text(
-                downloadTechnicalLabel(entry),
+                downloadRowDetail(entry),
                 style = MaterialTheme.typography.labelMedium,
-                color = RoachesColors.InkMuted,
+                color = if (entry.state == DownloadState.Failed) RoachesColors.Error else RoachesColors.InkMuted,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             if (entry.state == DownloadState.Downloading || entry.state == DownloadState.Queued) {
                 LinearProgressIndicator(
@@ -727,56 +837,9 @@ private fun DownloadRow(
                     trackColor = RoachesColors.SurfaceQuiet,
                 )
             }
-            Text(
-                when (entry.state) {
-                    DownloadState.Queued -> entry.statusMessage ?: "Queued"
-                    DownloadState.Downloading -> "${(entry.progress * 100).toInt()}% downloaded"
-                    DownloadState.Complete -> "Ready offline"
-                    DownloadState.Failed -> entry.statusMessage ?: "Download failed"
-                    DownloadState.Missing -> entry.statusMessage ?: "File unavailable"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = if (entry.state == DownloadState.Failed) RoachesColors.Error else RoachesColors.InkMuted,
-            )
-            Row(Modifier.padding(top = RoachesSpacing.xs)) {
-                if (playable) {
-                    IconButton(onClick = onPlay) {
-                        Icon(
-                            if (entry.mediaType == DownloadMediaType.Video) Icons.Rounded.PlayArrow else entry.mediaType.icon(),
-                            contentDescription = if (entry.mediaType == DownloadMediaType.Video) {
-                                "Play download"
-                            } else {
-                                "Open download"
-                            },
-                        )
-                    }
-                }
-                if (entry.canShareVideo) {
-                    IconButton(onClick = onShare) {
-                        Icon(Icons.Rounded.Share, contentDescription = "Share downloaded video")
-                    }
-                }
-                if (entry.canRenameFile) {
-                    IconButton(onClick = onRename) {
-                        Icon(Icons.Rounded.Edit, contentDescription = "Rename downloaded file")
-                    }
-                }
-                if (entry.state in setOf(DownloadState.Queued, DownloadState.Failed, DownloadState.Missing)) {
-                    IconButton(onClick = onRetry) {
-                        Icon(
-                            Icons.Rounded.Refresh,
-                            contentDescription = if (entry.state == DownloadState.Queued) {
-                                "Restart queued download"
-                            } else {
-                                "Retry download"
-                            },
-                        )
-                    }
-                }
-                IconButton(onClick = onRemove) {
-                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove download")
-                }
-            }
+        }
+        IconButton(onClick = onMore) {
+            Icon(Icons.Rounded.MoreVert, contentDescription = "More actions for ${entry.visibleName}")
         }
     }
 }
@@ -787,9 +850,9 @@ private fun DownloadArtwork(entry: DownloadEntry) {
     val isVideo = entry.mediaType == DownloadMediaType.Video
     val videoUri = entry.localUri.takeIf { isVideo && entry.state == DownloadState.Complete }
     val artworkModifier = Modifier
-        .width(if (isVideo) 96.dp else 64.dp)
+        .width(if (isVideo) 148.dp else 80.dp)
         .aspectRatio(if (isVideo) 16f / 9f else 1f)
-        .clip(RoachesShapes.Tight)
+        .clip(RoachesShapes.Standard)
         .background(RoachesColors.SurfaceQuiet)
     Box(artworkModifier, contentAlignment = Alignment.Center) {
         if (videoUri != null) {
@@ -834,17 +897,42 @@ private fun DownloadArtworkFallback(artwork: String?, mediaType: DownloadMediaTy
     }
 }
 
-private fun downloadTechnicalLabel(entry: DownloadEntry): String {
-    if (!entry.isLinkSave) {
-        return listOfNotNull(entry.source.technicalLabel, formatBytes(entry.source.sizeBytes))
-            .joinToString(" · ")
+private fun downloadRowDetail(entry: DownloadEntry): String {
+    val episode = if (entry.season > 0 && entry.episode > 0) {
+        "S${entry.season} E${entry.episode}"
+    } else {
+        null
     }
-    return buildList {
-        add(entry.mediaType.label)
-        entry.source.codec?.takeIf(String::isNotBlank)?.let(::add)
-        entry.source.audio?.takeIf(String::isNotBlank)?.let(::add)
-        formatBytes(entry.source.sizeBytes)?.let(::add)
-    }.distinct().joinToString(" · ")
+    val detail = when (entry.state) {
+        DownloadState.Complete -> formatBytes(entry.source.sizeBytes) ?: downloadTypeLabel(entry)
+        else -> downloadStateLabel(entry)
+    }
+    return listOfNotNull(episode, detail).joinToString(" · ")
+}
+
+private fun downloadDisplayFileName(entry: DownloadEntry): String {
+    val storedName = entry.source.filename?.takeIf(String::isNotBlank)
+    return if (entry.displayName != null || entry.isLinkSave) storedName ?: entry.visibleName else entry.visibleName
+}
+
+private fun downloadTypeLabel(entry: DownloadEntry): String {
+    val mimeFormat = entry.mimeType
+        .substringAfter('/', "")
+        .substringBefore(';')
+        .takeIf { it.isNotBlank() && it != "*" }
+    val fileFormat = entry.source.filename
+        ?.substringAfterLast('.', "")
+        ?.takeIf(String::isNotBlank)
+    val format = (mimeFormat ?: fileFormat)?.uppercase(Locale.US)
+    return listOfNotNull(entry.mediaType.label, format).distinct().joinToString(" · ")
+}
+
+private fun downloadStateLabel(entry: DownloadEntry): String = when (entry.state) {
+    DownloadState.Queued -> entry.statusMessage ?: "Queued"
+    DownloadState.Downloading -> "${(entry.progress * 100).toInt()}% downloaded"
+    DownloadState.Complete -> "Ready offline"
+    DownloadState.Failed -> entry.statusMessage ?: "Download failed"
+    DownloadState.Missing -> entry.statusMessage ?: "File unavailable"
 }
 
 private fun DownloadMediaType.icon(): ImageVector = when (this) {

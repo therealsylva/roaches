@@ -229,10 +229,6 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun openSettings() {
-        setDestination(MainDestination.Settings)
-    }
-
     fun openCategory(category: BrowseCategory) {
         mutableState.update {
             it.copy(

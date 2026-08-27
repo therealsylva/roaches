@@ -48,8 +48,9 @@ category such as a video resolution.
 - Only one primary button may dominate a region. Secondary actions use quiet
   icon or text treatment.
 - Use cards only for elevation, selection or a unified touch target.
-- The persistent bottom bar keeps five named destinations visible: Home,
-  Search, Library, Downloads and Settings.
+- The persistent bottom bar keeps five icon-only destinations visible: Home,
+  Search, Library, Downloads and Settings. Their names remain available to
+  accessibility services rather than consuming screen space.
 
 ## Accessibility and adaptation
 
