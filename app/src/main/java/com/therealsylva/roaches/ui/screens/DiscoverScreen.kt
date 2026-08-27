@@ -254,7 +254,7 @@ private fun DiscoverHeader(onSettings: () -> Unit, modifier: Modifier = Modifier
         RoachesWordmark()
         ArtworkIconButton(
             imageVector = Icons.Rounded.Settings,
-            contentDescription = "Settings",
+            contentDescription = "Open Settings",
             onClick = onSettings,
         )
     }

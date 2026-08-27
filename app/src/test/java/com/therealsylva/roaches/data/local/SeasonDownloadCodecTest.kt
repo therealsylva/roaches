@@ -144,6 +144,30 @@ class SeasonDownloadCodecTest {
     }
 
     @Test
+    fun renameKeepsTheStoredExtensionAndAcceptsUnicodeNames() {
+        assertThat(renamedDownloadFileName("Final cut.mkv", "Series-S02E01-720p.mp4"))
+            .isEqualTo("Final cut.mp4")
+        assertThat(renamedDownloadFileName("Épisode définitif", "Series-S02E01-720p.webm"))
+            .isEqualTo("Épisode définitif.webm")
+        assertThat(renamedDownloadFileName("../unsafe:name", "Series.mp4"))
+            .isEqualTo("unsafe name.mp4")
+    }
+
+    @Test
+    fun renamedDisplayNameRoundTrips() {
+        val entry = DownloadEntry(
+            downloadId = 9L,
+            media = media,
+            source = source.copy(filename = "Final cut.mp4"),
+            createdAt = 42L,
+            displayName = "Final cut",
+        )
+
+        assertThat(decodeDownloadEntries(encodeDownloadEntries(listOf(entry))).single())
+            .isEqualTo(entry)
+    }
+
+    @Test
     fun completedDownloadUriFallsBackToDownloadManagerUri() {
         assertThat(
             resolvedDownloadUri(

@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -138,24 +139,6 @@ fun RoachesApp(
                         onDownloadSeason = viewModel::downloadSeason,
                         onOpenRelated = viewModel::openDetails,
                     )
-                    AppScreen.Settings -> SettingsScreen(
-                        settings = state.settings,
-                        historyCount = state.history.size,
-                        updateLoading = state.updateLoading,
-                        updateMessage = state.updateMessage,
-                        updateAvailable = state.availableUpdate != null,
-                        onBack = { viewModel.goBack() },
-                        onRegion = viewModel::setContentRegion,
-                        onQuality = viewModel::setPlaybackQuality,
-                        onAudio = viewModel::setPreferredAudio,
-                        onWifiOnly = viewModel::setWifiOnlyDownloads,
-                        onDarkTheme = viewModel::setDarkTheme,
-                        onEggsKey = viewModel::enableEggs,
-                        onEggsOff = viewModel::disableEggs,
-                        onClearHistory = viewModel::clearHistory,
-                        onCheckUpdates = viewModel::checkForUpdates,
-                        onInstallUpdate = viewModel::installUpdate,
-                    )
                     AppScreen.Browse -> BrowseShell(state, viewModel)
                 }
 
@@ -249,11 +232,30 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                     onSavePickerFile = viewModel::saveCobaltPickerFile,
                     onSaveAllPickerFiles = viewModel::saveAllCobaltPickerFiles,
                     onRemove = viewModel::removeDownload,
+                    onRename = viewModel::renameDownload,
                     onPlay = viewModel::playDownload,
                     onShare = viewModel::shareDownload,
                     onRetry = viewModel::retryDownload,
                     onCancelSeason = viewModel::cancelSeasonDownload,
                     onRetrySeason = viewModel::retrySeasonDownload,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                MainDestination.Settings -> SettingsScreen(
+                    settings = state.settings,
+                    historyCount = state.history.size,
+                    updateLoading = state.updateLoading,
+                    updateMessage = state.updateMessage,
+                    updateAvailable = state.availableUpdate != null,
+                    onRegion = viewModel::setContentRegion,
+                    onQuality = viewModel::setPlaybackQuality,
+                    onAudio = viewModel::setPreferredAudio,
+                    onWifiOnly = viewModel::setWifiOnlyDownloads,
+                    onDarkTheme = viewModel::setDarkTheme,
+                    onEggsKey = viewModel::enableEggs,
+                    onEggsOff = viewModel::disableEggs,
+                    onClearHistory = viewModel::clearHistory,
+                    onCheckUpdates = viewModel::checkForUpdates,
+                    onInstallUpdate = viewModel::installUpdate,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -274,6 +276,7 @@ private fun RoachesNavigation(selected: MainDestination, onSelect: (MainDestinat
         NavItem(MainDestination.Search, "Search", Icons.Rounded.Search),
         NavItem(MainDestination.Library, "Library", Icons.Rounded.VideoLibrary),
         NavItem(MainDestination.Downloads, "Downloads", Icons.Rounded.Download),
+        NavItem(MainDestination.Settings, "Settings", Icons.Rounded.Settings),
     )
     Row(
         Modifier

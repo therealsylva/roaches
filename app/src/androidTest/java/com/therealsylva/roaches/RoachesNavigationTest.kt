@@ -21,7 +21,6 @@ class RoachesNavigationTest {
         compose.onNodeWithContentDescription("Home").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Home feed region").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithContentDescription("Search").performClick()
         compose.onNodeWithText("Title, actor or series").assertIsDisplayed()
         compose.onNodeWithContentDescription("Library").performClick()

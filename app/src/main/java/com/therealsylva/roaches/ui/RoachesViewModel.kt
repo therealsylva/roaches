@@ -43,6 +43,7 @@ import com.therealsylva.roaches.data.remote.CobaltChallengeRequired
 import com.therealsylva.roaches.data.remote.UpdateChecker
 import com.therealsylva.roaches.data.repository.RoachesRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,8 +53,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
 
-enum class MainDestination { Discover, Search, Library, Downloads }
-enum class AppScreen { Browse, Category, Details, Player, Settings }
+enum class MainDestination { Discover, Search, Library, Downloads, Settings }
+enum class AppScreen { Browse, Category, Details, Player }
 
 data class RoachesUiState(
     val destination: MainDestination = MainDestination.Discover,
@@ -229,7 +230,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun openSettings() {
-        mutableState.update { it.copy(screen = AppScreen.Settings) }
+        setDestination(MainDestination.Settings)
     }
 
     fun openCategory(category: BrowseCategory) {
@@ -911,6 +912,23 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         if (entry.batchId != null) SeasonDownloadCoordinator.schedule(getApplication())
     }
 
+    fun renameDownload(entry: DownloadEntry, name: String) {
+        if (!entry.canRenameFile) {
+            mutableState.update { it.copy(notice = "This file is not ready to rename") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { store.renameDownload(entry, name) }
+                .onSuccess { renamed ->
+                    refreshDownloads()
+                    mutableState.update { it.copy(notice = "Renamed to ${renamed.visibleName}") }
+                }
+                .onFailure { failure ->
+                    mutableState.update { it.copy(notice = failure.userMessage("File could not be renamed.")) }
+                }
+        }
+    }
+
     fun retryDownload(entry: DownloadEntry) {
         if (entry.batchId != null) {
             retrySeasonDownload(entry.batchId)
@@ -1007,10 +1025,10 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         val shareIntent = Intent(Intent.ACTION_SEND)
             .setType(entry.mimeType.ifBlank { "video/*" })
             .putExtra(Intent.EXTRA_STREAM, shareUri)
-            .putExtra(Intent.EXTRA_TITLE, entry.media.title)
+            .putExtra(Intent.EXTRA_TITLE, entry.visibleName)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        shareIntent.clipData = ClipData.newRawUri(entry.media.title, shareUri)
-        val chooser = Intent.createChooser(shareIntent, "Share ${entry.media.title}")
+        shareIntent.clipData = ClipData.newRawUri(entry.visibleName, shareUri)
+        val chooser = Intent.createChooser(shareIntent, "Share ${entry.visibleName}")
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
         runCatching { application.startActivity(chooser) }
@@ -1171,10 +1189,6 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
             }
             AppScreen.Category -> {
                 mutableState.update { it.copy(screen = AppScreen.Browse, category = null) }
-                true
-            }
-            AppScreen.Settings -> {
-                mutableState.update { it.copy(screen = AppScreen.Browse) }
                 true
             }
             AppScreen.Browse -> false

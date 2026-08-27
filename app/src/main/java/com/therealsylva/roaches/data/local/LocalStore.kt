@@ -32,6 +32,8 @@ import com.therealsylva.roaches.data.model.cobaltDisplayTitle
 import com.therealsylva.roaches.data.remote.ClientIdentity
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.IOException
 import java.util.Locale
 import java.util.UUID
 
@@ -125,6 +127,34 @@ internal fun safeCobaltFilename(filename: String, mediaType: DownloadMediaType):
     } else {
         "${normalized.substringBeforeLast('.', normalized)}.$fallbackExtension"
     }
+}
+
+internal fun renamedDownloadFileName(requestedName: String, currentFileName: String): String {
+    val currentExtension = currentFileName
+        .substringAfterLast('.', "")
+        .lowercase(Locale.US)
+        .takeIf { it.isNotBlank() && it.length <= 8 }
+    val requestedExtension = requestedName
+        .trim()
+        .substringAfterLast('.', "")
+        .lowercase(Locale.US)
+    val recognizedExtensions = DOWNLOAD_MEDIA_EXTENSIONS + COBALT_MEDIA_EXTENSIONS
+    val baseCandidate = if (
+        requestedExtension == currentExtension || requestedExtension in recognizedExtensions
+    ) {
+        requestedName.trim().substringBeforeLast('.')
+    } else {
+        requestedName
+    }
+    val safeBase = baseCandidate
+        .replace(Regex("[^\\p{L}\\p{N}._ -]"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .trim('.', ' ')
+        .take(160)
+        .trimEnd('.', ' ')
+    require(safeBase.isNotBlank()) { "Enter a file name" }
+    return currentExtension?.let { "$safeBase.$it" } ?: safeBase
 }
 
 private fun cobaltStreamSource(
@@ -601,6 +631,59 @@ class LocalStore(context: Context) {
         writeSeasonDownloadTasks(resizedTasks)
     }
 
+    @Suppress("DEPRECATION")
+    fun renameDownload(entry: DownloadEntry, requestedName: String): DownloadEntry = synchronized(DOWNLOAD_LOCK) {
+        val stored = storedDownloads()
+        val persisted = stored.firstOrNull { it.downloadId == entry.downloadId }
+            ?: error("This download has changed. Refresh Downloads and try again.")
+        val current = queryDownload(persisted)
+        check(current.state == DownloadState.Complete) { "This file is not ready to rename" }
+
+        val manager = appContext.getSystemService(DownloadManager::class.java)
+        val sourceFile = manager.completedDownloadFile(persisted.downloadId)
+        val newFileName = renamedDownloadFileName(requestedName, sourceFile.name)
+        val displayName = newFileName.substringBeforeLast('.', newFileName)
+        val renamedMetadata = persisted.copy(
+            displayName = displayName,
+            source = persisted.source.copy(filename = newFileName),
+        )
+
+        if (sourceFile.name == newFileName) {
+            writeDownloads(stored.map { candidate ->
+                if (candidate.downloadId == persisted.downloadId) renamedMetadata else candidate
+            })
+            return@synchronized renamedMetadata
+        }
+
+        val destination = File(requireNotNull(sourceFile.parentFile), newFileName)
+        check(!destination.exists()) { "A file with that name already exists" }
+        if (!sourceFile.renameTo(destination)) throw IOException("The stored file could not be renamed")
+
+        val newDownloadId = try {
+            manager.addCompletedDownload(
+                displayName,
+                if (persisted.isLinkSave) "Saved link · Roaches" else "${persisted.source.qualityLabel} · Roaches",
+                false,
+                persisted.mimeType,
+                destination.absolutePath,
+                destination.length(),
+                false,
+            ).also { id ->
+                if (id <= 0L) throw IOException("The renamed file could not be registered")
+            }
+        } catch (failure: Throwable) {
+            destination.renameTo(sourceFile)
+            throw failure
+        }
+
+        runCatching { manager.remove(persisted.downloadId) }
+        val renamed = renamedMetadata.copy(downloadId = newDownloadId)
+        writeDownloads(stored.map { candidate ->
+            if (candidate.downloadId == persisted.downloadId) renamed else candidate
+        })
+        renamed
+    }
+
     fun cancelSeasonDownload(batchId: String) = synchronized(DOWNLOAD_LOCK) {
         val entries = storedDownloads()
         val ids = entries.filter { it.batchId == batchId }.map(DownloadEntry::downloadId).toLongArray()
@@ -730,6 +813,21 @@ class LocalStore(context: Context) {
                 )
             }
         }.getOrDefault(entry.copy(state = DownloadState.Missing, statusMessage = "File unavailable"))
+    }
+
+    private fun DownloadManager.completedDownloadFile(downloadId: Long): File {
+        return query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
+            check(cursor.moveToFirst()) { "The stored file could not be found" }
+            val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            check(status == DownloadManager.STATUS_SUCCESSFUL) { "This file is not ready to rename" }
+            val localUri = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                ?: error("The stored file cannot be renamed")
+            val uri = Uri.parse(localUri)
+            check(uri.scheme == "file" && !uri.path.isNullOrBlank()) { "The stored file cannot be renamed" }
+            File(requireNotNull(uri.path)).also { file ->
+                check(file.isFile) { "The stored file could not be found" }
+            }
+        }
     }
 
     private fun storedDownloads(): List<DownloadEntry> {
@@ -901,6 +999,7 @@ private fun downloadToJson(entry: DownloadEntry) = JSONObject()
         ),
     )
     .put("created", entry.createdAt)
+    .put("displayName", entry.displayName)
     .put("season", entry.season)
     .put("episode", entry.episode)
     .put("episodeTitle", entry.episodeTitle)
@@ -918,6 +1017,7 @@ private fun downloadFromJson(json: JSONObject): DownloadEntry? {
         media = media,
         source = source,
         createdAt = json.optLong("created"),
+        displayName = json.nullableString("displayName"),
         season = json.optInt("season"),
         episode = json.optInt("episode"),
         episodeTitle = json.nullableString("episodeTitle"),

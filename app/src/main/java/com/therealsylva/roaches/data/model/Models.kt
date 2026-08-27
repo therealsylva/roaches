@@ -200,6 +200,7 @@ data class DownloadEntry(
     val media: MediaItem,
     val source: StreamSource,
     val createdAt: Long,
+    val displayName: String? = null,
     val season: Int = 0,
     val episode: Int = 0,
     val episodeTitle: String? = null,
@@ -221,6 +222,12 @@ data class DownloadEntry(
         get() = mediaType == DownloadMediaType.Video &&
             state == DownloadState.Complete &&
             !localUri.isNullOrBlank()
+
+    val canRenameFile: Boolean
+        get() = state == DownloadState.Complete && !localUri.isNullOrBlank()
+
+    val visibleName: String
+        get() = displayName ?: media.title
 
     val targetKey: String
         get() = downloadTargetKey(media.id, season, episode)

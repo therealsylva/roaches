@@ -56,8 +56,14 @@ class ModelsTest {
         )
 
         assertThat(completeVideo.canShareVideo).isTrue()
+        assertThat(completeVideo.canRenameFile).isTrue()
+        assertThat(completeVideo.visibleName).isEqualTo("Film")
+        assertThat(completeVideo.copy(displayName = "Final cut").visibleName).isEqualTo("Final cut")
         assertThat(completeVideo.copy(state = DownloadState.Downloading).canShareVideo).isFalse()
+        assertThat(completeVideo.copy(state = DownloadState.Downloading).canRenameFile).isFalse()
         assertThat(completeVideo.copy(localUri = null).canShareVideo).isFalse()
+        assertThat(completeVideo.copy(localUri = null).canRenameFile).isFalse()
         assertThat(completeVideo.copy(mediaType = DownloadMediaType.Audio).canShareVideo).isFalse()
+        assertThat(completeVideo.copy(mediaType = DownloadMediaType.Audio).canRenameFile).isTrue()
     }
 }

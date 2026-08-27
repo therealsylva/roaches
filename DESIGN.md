@@ -48,7 +48,8 @@ category such as a video resolution.
 - Only one primary button may dominate a region. Secondary actions use quiet
   icon or text treatment.
 - Use cards only for elevation, selection or a unified touch target.
-- A persistent bottom bar has four destinations at most.
+- The persistent bottom bar keeps five named destinations visible: Home,
+  Search, Library, Downloads and Settings.
 
 ## Accessibility and adaptation
 
