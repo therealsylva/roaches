@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -107,6 +108,7 @@ fun DownloadsScreen(
     onSaveAllPickerFiles: () -> Unit,
     onRemove: (DownloadEntry) -> Unit,
     onPlay: (DownloadEntry) -> Unit,
+    onShare: (DownloadEntry) -> Unit,
     onRetry: (DownloadEntry) -> Unit,
     onCancelSeason: (String) -> Unit,
     onRetrySeason: (String) -> Unit,
@@ -162,7 +164,13 @@ fun DownloadsScreen(
                     )
                 }
                 items(downloads, key = { it.downloadId }) { entry ->
-                    DownloadRow(entry, { onPlay(entry) }, { onRetry(entry) }, { onRemove(entry) })
+                    DownloadRow(
+                        entry = entry,
+                        onPlay = { onPlay(entry) },
+                        onShare = { onShare(entry) },
+                        onRetry = { onRetry(entry) },
+                        onRemove = { onRemove(entry) },
+                    )
                 }
             }
         }
@@ -619,7 +627,13 @@ private fun seasonStatus(batch: SeasonDownloadProgress): String = when {
 }
 
 @Composable
-private fun DownloadRow(entry: DownloadEntry, onPlay: () -> Unit, onRetry: () -> Unit, onRemove: () -> Unit) {
+private fun DownloadRow(
+    entry: DownloadEntry,
+    onPlay: () -> Unit,
+    onShare: () -> Unit,
+    onRetry: () -> Unit,
+    onRemove: () -> Unit,
+) {
     val playable = entry.state == DownloadState.Complete && !entry.localUri.isNullOrBlank()
     Row(
         Modifier
@@ -672,32 +686,39 @@ private fun DownloadRow(entry: DownloadEntry, onPlay: () -> Unit, onRetry: () ->
                 color = if (entry.state == DownloadState.Failed) RoachesColors.Error else RoachesColors.InkMuted,
             )
         }
-        if (playable) {
-            IconButton(onClick = onPlay) {
-                Icon(
-                    if (entry.mediaType == DownloadMediaType.Video) Icons.Rounded.PlayArrow else entry.mediaType.icon(),
-                    contentDescription = if (entry.mediaType == DownloadMediaType.Video) {
-                        "Play download"
-                    } else {
-                        "Open download"
-                    },
-                )
+        Row {
+            if (playable) {
+                IconButton(onClick = onPlay) {
+                    Icon(
+                        if (entry.mediaType == DownloadMediaType.Video) Icons.Rounded.PlayArrow else entry.mediaType.icon(),
+                        contentDescription = if (entry.mediaType == DownloadMediaType.Video) {
+                            "Play download"
+                        } else {
+                            "Open download"
+                        },
+                    )
+                }
             }
-        }
-        if (entry.state in setOf(DownloadState.Queued, DownloadState.Failed, DownloadState.Missing)) {
-            IconButton(onClick = onRetry) {
-                Icon(
-                    Icons.Rounded.Refresh,
-                    contentDescription = if (entry.state == DownloadState.Queued) {
-                        "Restart queued download"
-                    } else {
-                        "Retry download"
-                    },
-                )
+            if (entry.canShareVideo) {
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Rounded.Share, contentDescription = "Share downloaded video")
+                }
             }
-        }
-        IconButton(onClick = onRemove) {
-            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove download")
+            if (entry.state in setOf(DownloadState.Queued, DownloadState.Failed, DownloadState.Missing)) {
+                IconButton(onClick = onRetry) {
+                    Icon(
+                        Icons.Rounded.Refresh,
+                        contentDescription = if (entry.state == DownloadState.Queued) {
+                            "Restart queued download"
+                        } else {
+                            "Retry download"
+                        },
+                    )
+                }
+            }
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove download")
+            }
         }
     }
 }

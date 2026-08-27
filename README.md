@@ -20,7 +20,8 @@ accounts, subscriptions or paywalls.
 - stream, quality, audio and external subtitle selection;
 - native Media3/ExoPlayer playback, speed, crop, swipe controls and picture-in-picture;
 - saved, liked, recents and continue-watching state stored on device;
-- private app-scoped downloads with progress tracking and offline playback;
+- private app-scoped downloads with progress tracking, offline playback and
+  direct Android sharing for completed videos;
 - link saving through Cobalt from a pasted URL or Android's share sheet, with
   video, audio and image-carousel downloads;
 - local video import through Android's document picker;
