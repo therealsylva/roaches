@@ -175,7 +175,6 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                 MainDestination.Discover -> DiscoverScreen(
                     state = state,
                     onRetry = viewModel::loadDiscover,
-                    onSettings = viewModel::openSettings,
                     onCategory = viewModel::openCategory,
                     onOpen = viewModel::openDetails,
                     modifier = Modifier.fillMaxSize(),
@@ -282,7 +281,7 @@ private fun RoachesNavigation(selected: MainDestination, onSelect: (MainDestinat
         Modifier
             .background(RoachesColors.Canvas.copy(alpha = 0.98f))
             .navigationBarsPadding()
-            .height(64.dp),
+            .height(56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         items.forEach { item ->
@@ -290,21 +289,7 @@ private fun RoachesNavigation(selected: MainDestination, onSelect: (MainDestinat
             NavigationBarItem(
                 selected = active,
                 onClick = { onSelect(item.destination) },
-                icon = {
-                    Box(contentAlignment = Alignment.TopCenter) {
-                        if (active) {
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(bottom = 28.dp)
-                                    .height(2.dp)
-                                    .background(RoachesColors.Crawl),
-                            )
-                        }
-                        Icon(item.icon, contentDescription = item.label)
-                    }
-                },
-                label = { Text(item.label) },
+                icon = { Icon(item.icon, contentDescription = item.label) },
                 modifier = Modifier.semantics {
                     this.selected = active
                     role = Role.Tab
