@@ -19,9 +19,11 @@ class RequestSignerTest {
         val info = JSONObject(signer.clientInfo)
 
         assertThat(signer.userAgent).isEqualTo(
-            "com.community.oneroom/50020046 (Linux; U; Android 13; en_US; " +
+            "com.community.oneroom/50020121 (Linux; U; Android 13; en_US; " +
                 "23078RKD5C; Build/TQ2A.230405.003; Cronet/135.0.7012.3)",
         )
+        assertThat(info.getString("version_name")).isEqualTo("4.0.01.0813.02")
+        assertThat(info.getInt("version_code")).isEqualTo(50_020_121)
         assertThat(info.getString("brand")).isEqualTo("Redmi")
         assertThat(info.getString("model")).isEqualTo("23078RKD5C")
         assertThat(info.getString("region")).isEqualTo("US")

@@ -25,6 +25,12 @@ HOSTS = (
     "https://api.inmoviebox.com",
 )
 SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
+VERSION_NAME = "4.0.01.0813.02"
+VERSION_CODE = 50_020_121
+USER_AGENT = (
+    f"com.community.oneroom/{VERSION_CODE} (Linux; U; Android 13; en_US; "
+    "23078RKD5C; Build/TQ2A.230405.003; Cronet/135.0.7012.3)"
+)
 IDENTITY = str(uuid.uuid4())
 IDENTITY_HASH = hashlib.sha256(IDENTITY.encode()).digest()
 FORWARDED_IP = f"103.241.{IDENTITY_HASH[0] % 253 + 1}.{IDENTITY_HASH[1] % 253 + 1}"
@@ -55,10 +61,7 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
     key = base64.b64decode(SECRET + "=" * ((4 - len(SECRET) % 4) % 4))
     signature = base64.b64encode(hmac.new(key, canonical.encode(), hashlib.md5).digest()).decode()
     headers = {
-        "User-Agent": (
-            "com.community.oneroom/50020046 (Linux; U; Android 13; en_US; "
-            "23078RKD5C; Build/TQ2A.230405.003; Cronet/135.0.7012.3)"
-        ),
+        "User-Agent": USER_AGENT,
         "Accept": "application/json",
         "Content-Type": "application/json",
         "X-Client-Token": f"{timestamp},{md5_hex(str(timestamp)[::-1].encode())}",
@@ -68,8 +71,8 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
         "X-Client-Info": json.dumps(
             {
                 "package_name": "com.community.oneroom",
-                "version_name": "3.0.03.0529.03",
-                "version_code": 50020046,
+                "version_name": VERSION_NAME,
+                "version_code": VERSION_CODE,
                 "os": "android",
                 "os_version": "13",
                 "install_ch": "ps",
@@ -91,6 +94,50 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
+
+
+def validate_stream_delivery(stream: dict) -> int:
+    """Confirm the CDN serves the resource advertised by the provider."""
+    declared_size = next(
+        (
+            int(stream[key])
+            for key in ("size", "fileSize", "resourceSize")
+            if str(stream.get(key, "")).isdigit()
+        ),
+        0,
+    )
+    if declared_size <= 0:
+        raise RuntimeError("playable resource has no declared size")
+
+    resource_link = stream.get("resourceLink")
+    if not resource_link:
+        raise RuntimeError("playable resource has no CDN link")
+    range_request = urllib.request.Request(
+        resource_link,
+        headers={"Range": "bytes=0-0", "User-Agent": USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(range_request, timeout=30) as response:
+            content_range = response.headers.get("Content-Range", "")
+            content_length = response.headers.get("Content-Length", "")
+    except urllib.error.HTTPError as error:
+        content_range = error.headers.get("Content-Range", "")
+        content_length = error.headers.get("Content-Length", "")
+        if error.code != 416:
+            raise
+
+    range_total = content_range.rsplit("/", 1)[-1]
+    delivered_size = (
+        int(range_total)
+        if range_total.isdigit()
+        else int(content_length) if content_length.isdigit() else 0
+    )
+    if delivered_size != declared_size:
+        raise RuntimeError(
+            "CDN substituted the advertised stream "
+            f"(declared={declared_size}, delivered={delivered_size})"
+        )
+    return delivered_size
 
 
 def request(method: str, path: str, payload: dict | None = None, token: str | None = None):
@@ -297,9 +344,13 @@ def main() -> int:
         raise RuntimeError("details or playable resources missing")
 
     qualities = sorted({int(item.get("resolution", 0)) for item in streams if int(item.get("resolution", 0)) > 0}, reverse=True)
+    delivered_size = validate_stream_delivery(
+        max(streams, key=lambda item: int(item.get("resolution", 0)))
+    )
     print(
         f"LIVE_ANDROID_API_OK title={details['title']!r} streams={len(streams)} "
-        f"qualities={qualities} rails={','.join(f'{name}:{len(items)}' for name, items in clean_rails.items())}"
+        f"qualities={qualities} bytes={delivered_size} "
+        f"rails={','.join(f'{name}:{len(items)}' for name, items in clean_rails.items())}"
     )
     return 0
 
