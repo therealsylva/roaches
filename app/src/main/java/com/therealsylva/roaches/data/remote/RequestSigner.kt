@@ -19,13 +19,14 @@ internal class RequestSigner(private val identity: ClientIdentity) {
     companion object {
         private const val SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
         private const val BODY_HASH_LIMIT = 102_400
-        private const val VERSION_CODE = 50_020_046
+        private const val VERSION_CODE = 50_020_121
+        private const val VERSION_NAME = "4.0.01.0813.02"
         private const val ACCEPT = "application/json"
         private const val OS_VERSION = "13"
         private const val BRAND = "Redmi"
         private const val MODEL = "23078RKD5C"
         private const val USER_AGENT =
-            "com.community.oneroom/50020046 (Linux; U; Android 13; en_US; " +
+            "com.community.oneroom/50020121 (Linux; U; Android 13; en_US; " +
                 "23078RKD5C; Build/TQ2A.230405.003; Cronet/135.0.7012.3)"
     }
 
@@ -33,7 +34,7 @@ internal class RequestSigner(private val identity: ClientIdentity) {
 
     internal val clientInfo = JSONObject()
         .put("package_name", "com.community.oneroom")
-        .put("version_name", "3.0.03.0529.03")
+        .put("version_name", VERSION_NAME)
         .put("version_code", VERSION_CODE)
         .put("os", "android")
         .put("os_version", OS_VERSION)
