@@ -50,6 +50,7 @@ import com.therealsylva.roaches.ui.screens.LibraryScreen
 import com.therealsylva.roaches.ui.screens.PlayerScreen
 import com.therealsylva.roaches.ui.screens.SearchScreen
 import com.therealsylva.roaches.ui.screens.SettingsScreen
+import com.therealsylva.roaches.ui.screens.SportsScreen
 import com.therealsylva.roaches.ui.theme.RoachesColors
 import com.therealsylva.roaches.ui.theme.RoachesTheme
 import com.therealsylva.roaches.data.model.SourceIntent
@@ -119,6 +120,13 @@ fun RoachesApp(
                         onRetry = viewModel::retryCategory,
                         onOpen = viewModel::openDetails,
                     )
+                    AppScreen.Sports -> SportsScreen(
+                        state = state,
+                        onBack = { viewModel.goBack() },
+                        onRefresh = viewModel::loadSports,
+                        onSport = viewModel::selectSport,
+                        onOpen = viewModel::openSportsMatch,
+                    )
                     AppScreen.Details -> DetailsScreen(
                         state = state,
                         saved = viewModel.isSaved(state.details?.item ?: state.detailsSeed),
@@ -177,6 +185,7 @@ private fun BrowseShell(state: RoachesUiState, viewModel: RoachesViewModel) {
                     onRetry = viewModel::loadDiscover,
                     onCategory = viewModel::openCategory,
                     onOpen = viewModel::openDetails,
+                    onSports = viewModel::openSports,
                     modifier = Modifier.fillMaxSize(),
                 )
                 MainDestination.Search -> SearchScreen(
