@@ -112,6 +112,19 @@ fun DiscoverScreen(
                 contentPadding = PaddingValues(horizontal = RoachesSpacing.md),
                 horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.xs),
             ) {
+                item(key = "sports") {
+                    TextButton(
+                        onClick = onSports,
+                        shape = RoachesShapes.Tight,
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = RoachesColors.SurfaceQuiet,
+                            contentColor = RoachesColors.Ink,
+                        ),
+                        modifier = Modifier.height(48.dp),
+                    ) {
+                        Text("Sports", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
                 items(BrowseCategory.entries, key = BrowseCategory::name) { category ->
                     TextButton(
                         onClick = { onCategory(category) },
