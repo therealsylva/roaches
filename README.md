@@ -17,7 +17,7 @@ accounts, subscriptions or paywalls.
 - artwork-led Home with a rotating feature, editorial shelves and genre browsing;
 - search with debounced live results;
 - film and series details, seasons and episodes;
-- live football, basketball and cricket fixtures with native HLS playback;
+- live football fixtures with native HLS playback;
 - stream, quality, audio and external subtitle selection;
 - native Media3/ExoPlayer playback, speed, crop, swipe controls and picture-in-picture;
 - saved, liked, recents and continue-watching state stored on device;
