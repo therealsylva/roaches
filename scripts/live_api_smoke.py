@@ -185,28 +185,25 @@ def validate_sports_journey() -> tuple[str, str]:
     now_ms = int(time.time() * 1000)
     start_ms = now_ms - day_ms
     end_ms = now_ms + day_ms
-    selected: dict | None = None
-    selected_sport = ""
-    for sport in ("football", "basketball", "cricket"):
-        catalogue = sports_request(
-            "/wefeed-h5api-bff/live/match-list-v3",
-            {
-                "status": 0,
-                "matchType": sport,
-                "startTime": start_ms,
-                "endTime": end_ms,
-            },
-        )
-        for league in catalogue.get("list", []):
-            matches = league.get("matchList", [])
-            if matches:
-                selected = matches[0]
-                selected_sport = sport
-                break
-        if selected is not None:
-            break
+    catalogue = sports_request(
+        "/wefeed-h5api-bff/live/match-list-v3",
+        {
+            "status": 0,
+            "matchType": "football",
+            "startTime": start_ms,
+            "endTime": end_ms,
+        },
+    )
+    selected = next(
+        (
+            matches[0]
+            for league in catalogue.get("list", [])
+            if (matches := league.get("matchList", []))
+        ),
+        None,
+    )
     if selected is None or not selected.get("id"):
-        raise RuntimeError("sports provider returned no fixtures across its supported sports")
+        raise RuntimeError("sports provider returned no football fixtures")
 
     detail = sports_request(
         "/wefeed-h5api-bff/live/match-detail",
@@ -217,7 +214,7 @@ def validate_sports_journey() -> tuple[str, str]:
         raise RuntimeError("sports match detail is missing teams or status")
     if detail.get("status") == "MatchIng" and ".m3u8" not in detail.get("playPath", ""):
         raise RuntimeError("live sports match has no direct HLS stream")
-    return selected_sport, f"{teams[0]} vs {teams[1]}"
+    return "football", f"{teams[0]} vs {teams[1]}"
 
 
 def primary_subjects(search: dict) -> list[dict]:
