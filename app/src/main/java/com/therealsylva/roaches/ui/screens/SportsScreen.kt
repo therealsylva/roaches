@@ -19,14 +19,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Sports
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,7 +33,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.therealsylva.roaches.data.model.SportType
 import com.therealsylva.roaches.data.model.SportsMatch
 import com.therealsylva.roaches.data.model.SportsMatchStatus
 import com.therealsylva.roaches.ui.RoachesUiState
@@ -53,7 +50,6 @@ fun SportsScreen(
     state: RoachesUiState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onSport: (SportType) -> Unit,
     onOpen: (SportsMatch) -> Unit,
 ) {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -76,23 +72,6 @@ fun SportsScreen(
             Spacer(Modifier.weight(1f))
             IconButton(onClick = onRefresh, enabled = !state.sportsLoading) {
                 Icon(Icons.Rounded.Refresh, contentDescription = "Refresh matches")
-            }
-        }
-
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = RoachesSpacing.md),
-            horizontalArrangement = Arrangement.spacedBy(RoachesSpacing.xs),
-        ) {
-            SportType.entries.forEach { sport ->
-                val selected = sport == state.sportType
-                TextButton(
-                    onClick = { onSport(sport) },
-                    shape = RoachesShapes.Tight,
-                    colors = ButtonDefaults.textButtonColors(
-                        containerColor = if (selected) RoachesColors.Ink else RoachesColors.SurfaceQuiet,
-                        contentColor = if (selected) RoachesColors.Canvas else RoachesColors.Ink,
-                    ),
-                ) { Text(sport.label, style = MaterialTheme.typography.labelLarge) }
             }
         }
 
