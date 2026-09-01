@@ -2,8 +2,6 @@ package com.therealsylva.roaches.data.model
 
 enum class SportType(val apiValue: String, val label: String) {
     Football("football", "Football"),
-    Basketball("basketball", "Basketball"),
-    Cricket("cricket", "Cricket"),
 }
 
 enum class SportsMatchStatus { Scheduled, Live, Ended }

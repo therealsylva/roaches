@@ -204,12 +204,6 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
         if (mutableState.value.sportsLeagues.isEmpty()) loadSports()
     }
 
-    fun selectSport(sport: SportType) {
-        if (sport == mutableState.value.sportType) return
-        mutableState.update { it.copy(sportType = sport, sportsLeagues = emptyList()) }
-        loadSports()
-    }
-
     fun loadSports() {
         sportsJob?.cancel()
         val sport = mutableState.value.sportType

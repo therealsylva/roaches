@@ -124,7 +124,6 @@ fun RoachesApp(
                         state = state,
                         onBack = { viewModel.goBack() },
                         onRefresh = viewModel::loadSports,
-                        onSport = viewModel::selectSport,
                         onOpen = viewModel::openSportsMatch,
                     )
                     AppScreen.Details -> DetailsScreen(
