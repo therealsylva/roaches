@@ -28,12 +28,16 @@ import com.therealsylva.roaches.data.model.LinkDownloadMode
 import com.therealsylva.roaches.data.model.LinkVideoQuality
 import com.therealsylva.roaches.data.model.MediaDetails
 import com.therealsylva.roaches.data.model.MediaItem
+import com.therealsylva.roaches.data.model.MediaKind
 import com.therealsylva.roaches.data.model.PlaybackQuality
 import com.therealsylva.roaches.data.model.PreferredAudio
 import com.therealsylva.roaches.data.model.ReleaseUpdate
 import com.therealsylva.roaches.data.model.SeasonDownloadProgress
 import com.therealsylva.roaches.data.model.Shelf
 import com.therealsylva.roaches.data.model.StreamSource
+import com.therealsylva.roaches.data.model.SportType
+import com.therealsylva.roaches.data.model.SportsLeague
+import com.therealsylva.roaches.data.model.SportsMatch
 import com.therealsylva.roaches.data.model.SourceIntent
 import com.therealsylva.roaches.data.model.WatchEntry
 import com.therealsylva.roaches.data.model.extractHttpUrl
@@ -42,6 +46,7 @@ import com.therealsylva.roaches.data.remote.CobaltApi
 import com.therealsylva.roaches.data.remote.CobaltChallengeRequired
 import com.therealsylva.roaches.data.remote.UpdateChecker
 import com.therealsylva.roaches.data.repository.RoachesRepository
+import com.therealsylva.roaches.data.repository.SportsRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,9 +57,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.IOException
+import java.time.LocalDate
 
 enum class MainDestination { Discover, Search, Library, Downloads, Settings }
-enum class AppScreen { Browse, Category, Details, Player }
+enum class AppScreen { Browse, Sports, Category, Details, Player }
 
 data class RoachesUiState(
     val destination: MainDestination = MainDestination.Discover,
@@ -85,7 +91,14 @@ data class RoachesUiState(
     val playerMedia: MediaItem? = null,
     val playerSource: StreamSource? = null,
     val playerReturnDestination: MainDestination? = null,
+    val playerReturnsToSports: Boolean = false,
     val captionsLoading: Boolean = false,
+    val sportType: SportType = SportType.Football,
+    val sportsDate: LocalDate = LocalDate.now(),
+    val sportsLeagues: List<SportsLeague> = emptyList(),
+    val sportsLoading: Boolean = false,
+    val sportsError: String? = null,
+    val sportsOpeningId: String? = null,
     val watchlist: List<MediaItem> = emptyList(),
     val liked: List<MediaItem> = emptyList(),
     val history: List<WatchEntry> = emptyList(),
@@ -121,6 +134,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
 
     private val store = LocalStore(application)
     private var repository = RoachesRepository(store)
+    private val sportsRepository = SportsRepository()
     private val updateChecker = UpdateChecker()
     private val updateInstaller = AppUpdateInstaller(application)
     private val cobaltApi = CobaltApi()
@@ -130,6 +144,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
     private var discoverJob: Job? = null
     private var searchJob: Job? = null
     private var cobaltJob: Job? = null
+    private var sportsJob: Job? = null
     private var cobaltOperation: CobaltOperation? = null
     private var lastProgressWrite = 0L
 
@@ -181,6 +196,100 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
             }
+        }
+    }
+
+    fun openSports() {
+        mutableState.update { it.copy(screen = AppScreen.Sports) }
+        if (mutableState.value.sportsLeagues.isEmpty()) loadSports()
+    }
+
+    fun selectSport(sport: SportType) {
+        if (sport == mutableState.value.sportType) return
+        mutableState.update { it.copy(sportType = sport, sportsLeagues = emptyList()) }
+        loadSports()
+    }
+
+    fun loadSports() {
+        sportsJob?.cancel()
+        val sport = mutableState.value.sportType
+        val date = mutableState.value.sportsDate
+        mutableState.update { it.copy(sportsLoading = true, sportsError = null) }
+        sportsJob = viewModelScope.launch {
+            runCatching { sportsRepository.matches(sport, date) }
+                .onSuccess { leagues ->
+                    if (mutableState.value.sportType != sport) return@onSuccess
+                    mutableState.update {
+                        it.copy(
+                            sportsLeagues = leagues,
+                            sportsLoading = false,
+                            sportsError = if (leagues.isEmpty()) "No ${sport.label.lowercase()} matches are listed today." else null,
+                        )
+                    }
+                }
+                .onFailure { failure ->
+                    if (failure is CancellationException) return@onFailure
+                    mutableState.update {
+                        it.copy(
+                            sportsLoading = false,
+                            sportsError = failure.userMessage("Live sports could not be loaded."),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun openSportsMatch(match: SportsMatch) {
+        if (mutableState.value.sportsOpeningId != null) return
+        mutableState.update { it.copy(sportsOpeningId = match.id, sportsError = null) }
+        viewModelScope.launch {
+            runCatching { sportsRepository.match(match.id, match.sport) }
+                .onSuccess { fresh -> playSports(fresh) }
+                .onFailure { failure ->
+                    mutableState.update {
+                        it.copy(
+                            sportsOpeningId = null,
+                            notice = failure.userMessage("This stream could not be opened."),
+                        )
+                    }
+                }
+        }
+    }
+
+    private fun playSports(match: SportsMatch) {
+        val replay = match.replays.firstOrNull()
+        val directAlternative = match.alternativeStreams.firstOrNull {
+            it.url.contains(".m3u8", ignoreCase = true) || it.url.contains(".mp4", ignoreCase = true)
+        }
+        val url = match.playUrl ?: replay?.url ?: directAlternative?.url
+        if (url.isNullOrBlank()) {
+            mutableState.update {
+                it.copy(sportsOpeningId = null, notice = "The broadcast is not available yet.")
+            }
+            return
+        }
+        val media = MediaItem(
+            id = "sports:${match.id}",
+            title = match.title,
+            kind = MediaKind.Movie,
+            posterUrl = match.home.avatarUrl ?: match.away.avatarUrl,
+            description = match.league,
+        )
+        mutableState.update {
+            it.copy(
+                playerMedia = media,
+                playerSource = StreamSource(
+                    resourceId = "sports:${match.id}",
+                    url = url,
+                    filename = match.title,
+                    durationSeconds = replay?.durationSeconds ?: directAlternative?.durationSeconds,
+                ),
+                captionsLoading = false,
+                playerReturnDestination = null,
+                playerReturnsToSports = true,
+                sportsOpeningId = null,
+                screen = AppScreen.Player,
+            )
         }
     }
 
@@ -502,6 +611,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 playerSource = source,
                 captionsLoading = true,
                 playerReturnDestination = null,
+                playerReturnsToSports = false,
                 screen = AppScreen.Player,
             )
         }
@@ -1002,6 +1112,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 playerMedia = entry.media,
                 playerSource = entry.source.copy(url = entry.localUri),
                 playerReturnDestination = MainDestination.Downloads,
+                playerReturnsToSports = false,
                 captionsLoading = false,
                 screen = AppScreen.Player,
             )
@@ -1065,6 +1176,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
                 playerMedia = media,
                 playerSource = StreamSource(entry.id, entry.uri, filename = entry.title),
                 playerReturnDestination = MainDestination.Library,
+                playerReturnsToSports = false,
                 captionsLoading = false,
                 screen = AppScreen.Player,
             )
@@ -1090,7 +1202,7 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
 
     fun recordProgress(positionMs: Long, durationMs: Long, force: Boolean = false) {
         val media = mutableState.value.playerMedia ?: return
-        if (media.id.startsWith("local:") || media.id.startsWith("link:")) return
+        if (media.id.startsWith("local:") || media.id.startsWith("link:") || media.id.startsWith("sports:")) return
         val now = System.currentTimeMillis()
         if (!force && now - lastProgressWrite < 5_000) return
         lastProgressWrite = now
@@ -1166,7 +1278,13 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
             AppScreen.Player -> {
                 mutableState.update {
                     val returnDestination = it.playerReturnDestination
-                    if (returnDestination == null) {
+                    if (it.playerReturnsToSports) {
+                        it.copy(
+                            screen = AppScreen.Sports,
+                            playerSource = null,
+                            playerReturnsToSports = false,
+                        )
+                    } else if (returnDestination == null) {
                         it.copy(screen = AppScreen.Details, playerSource = null)
                     } else {
                         it.copy(
@@ -1185,6 +1303,10 @@ class RoachesViewModel(application: Application) : AndroidViewModel(application)
             }
             AppScreen.Category -> {
                 mutableState.update { it.copy(screen = AppScreen.Browse, category = null) }
+                true
+            }
+            AppScreen.Sports -> {
+                mutableState.update { it.copy(screen = AppScreen.Browse, sportsOpeningId = null) }
                 true
             }
             AppScreen.Browse -> false
