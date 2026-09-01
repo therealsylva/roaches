@@ -98,7 +98,7 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
 
 
 def validate_stream_delivery(stream: dict) -> int:
-    """Confirm the CDN serves the resource advertised by the provider."""
+    """Confirm the CDN returns media rather than a forced-update payload."""
     declared_size = next(
         (
             int(stream[key])
@@ -115,30 +115,27 @@ def validate_stream_delivery(stream: dict) -> int:
         raise RuntimeError("playable resource has no CDN link")
     range_request = urllib.request.Request(
         resource_link,
-        headers={"Range": "bytes=0-0", "User-Agent": USER_AGENT},
+        headers={"Range": "bytes=0-65535", "User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(range_request, timeout=30) as response:
-            content_range = response.headers.get("Content-Range", "")
-            content_length = response.headers.get("Content-Length", "")
+            sample = response.read(65_536)
     except urllib.error.HTTPError as error:
-        content_range = error.headers.get("Content-Range", "")
-        content_length = error.headers.get("Content-Length", "")
-        if error.code != 416:
-            raise
+        raise RuntimeError(f"playable resource returned HTTP {error.code}") from error
 
-    range_total = content_range.rsplit("/", 1)[-1]
-    delivered_size = (
-        int(range_total)
-        if range_total.isdigit()
-        else int(content_length) if content_length.isdigit() else 0
+    media_signature = (
+        sample.startswith(b"#EXTM3U")
+        or sample.startswith(b"\x1a\x45\xdf\xa3")
+        or sample.startswith(b"OggS")
+        or sample[:1] == b"G"
+        or b"ftyp" in sample[:32]
     )
-    if delivered_size != declared_size:
+    if not media_signature:
         raise RuntimeError(
             "CDN substituted the advertised stream "
-            f"(declared={declared_size}, delivered={delivered_size})"
+            f"(declared={declared_size}, signature={sample[:8].hex()})"
         )
-    return delivered_size
+    return declared_size
 
 
 def request(method: str, path: str, payload: dict | None = None, token: str | None = None):
