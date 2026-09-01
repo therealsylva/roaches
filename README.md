@@ -5,7 +5,7 @@
 # Roaches
 
 Roaches is a compact native Android client for browsing and playing
-community-indexed film and television streams, saving supported public media
+community-indexed film, television and live sports streams, saving supported public media
 links and keeping an offline library on-device. The signed APK is about 3 MB
 and intentionally contains no advertising SDKs, analytics, attribution code,
 accounts, subscriptions or paywalls.
@@ -17,6 +17,7 @@ accounts, subscriptions or paywalls.
 - artwork-led Home with a rotating feature, editorial shelves and genre browsing;
 - search with debounced live results;
 - film and series details, seasons and episodes;
+- live football, basketball and cricket fixtures with native HLS playback;
 - stream, quality, audio and external subtitle selection;
 - native Media3/ExoPlayer playback, speed, crop, swipe controls and picture-in-picture;
 - saved, liked, recents and continue-watching state stored on device;

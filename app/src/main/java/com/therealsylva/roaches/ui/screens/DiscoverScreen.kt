@@ -16,12 +16,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.SportsSoccer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -61,6 +63,7 @@ fun DiscoverScreen(
     onRetry: () -> Unit,
     onCategory: (BrowseCategory) -> Unit,
     onOpen: (MediaItem) -> Unit,
+    onSports: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val featuredItems = remember(state.shelves) {
@@ -82,11 +85,11 @@ fun DiscoverScreen(
                     transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(180)) },
                     label = "featured-title",
                 ) { featured ->
-                    DiscoverHero(featured, onOpen)
+                    DiscoverHero(featured, onOpen, onSports)
                 }
             } else {
                 Column(Modifier.statusBarsPadding().padding(top = RoachesSpacing.lg)) {
-                    DiscoverHeader(Modifier.padding(horizontal = RoachesSpacing.md))
+                    DiscoverHeader(onSports, Modifier.padding(horizontal = RoachesSpacing.md))
                     if (state.discoverLoading) {
                         LoadingState("Opening Home", Modifier.padding(top = 140.dp))
                     } else {
@@ -169,7 +172,7 @@ fun DiscoverScreen(
 }
 
 @Composable
-private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
+private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit, onSports: () -> Unit) {
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -185,6 +188,7 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
         )
         ArtworkScrim(Modifier.fillMaxSize(), strong = true)
         DiscoverHeader(
+            onSports = onSports,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
@@ -241,11 +245,19 @@ private fun DiscoverHero(item: MediaItem, onOpen: (MediaItem) -> Unit) {
 }
 
 @Composable
-private fun DiscoverHeader(modifier: Modifier = Modifier) {
+private fun DiscoverHeader(onSports: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RoachesWordmark()
+        Spacer(Modifier.weight(1f))
+        TextButton(
+            onClick = onSports,
+            colors = ButtonDefaults.textButtonColors(contentColor = RoachesColors.Ink),
+        ) {
+            Icon(Icons.Rounded.SportsSoccer, contentDescription = null, modifier = Modifier.size(20.dp))
+            Text("Live sports", modifier = Modifier.padding(start = RoachesSpacing.xs))
+        }
     }
 }
