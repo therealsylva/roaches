@@ -24,6 +24,7 @@ HOSTS = (
     "https://api6sg.aoneroom.com",
     "https://api.inmoviebox.com",
 )
+SPORTS_HOST = "https://h5-sport-api.aoneroom.com"
 SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
 VERSION_NAME = "4.0.01.0813.02"
 VERSION_CODE = 50_020_121
@@ -166,6 +167,62 @@ def request(method: str, path: str, payload: dict | None = None, token: str | No
     raise RuntimeError("all provider hosts failed") from last_error
 
 
+def sports_request(path: str, query: dict[str, str | int]) -> dict:
+    url = SPORTS_HOST + path + "?" + urllib.parse.urlencode(query)
+    sports_call = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "callerSource": "node-frontend"},
+    )
+    with urllib.request.urlopen(sports_call, timeout=20) as response:
+        payload = json.load(response)
+    if payload.get("code") != 0:
+        raise RuntimeError(f"sports provider rejected request: {payload.get('message', 'unknown error')}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("sports provider returned no data")
+    return data
+
+
+def validate_sports_journey() -> tuple[str, str]:
+    day_ms = 86_400_000
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - day_ms
+    end_ms = now_ms + day_ms
+    selected: dict | None = None
+    selected_sport = ""
+    for sport in ("football", "basketball", "cricket"):
+        catalogue = sports_request(
+            "/wefeed-h5api-bff/live/match-list-v3",
+            {
+                "status": 0,
+                "matchType": sport,
+                "startTime": start_ms,
+                "endTime": end_ms,
+            },
+        )
+        for league in catalogue.get("list", []):
+            matches = league.get("matchList", [])
+            if matches:
+                selected = matches[0]
+                selected_sport = sport
+                break
+        if selected is not None:
+            break
+    if selected is None or not selected.get("id"):
+        raise RuntimeError("sports provider returned no fixtures across its supported sports")
+
+    detail = sports_request(
+        "/wefeed-h5api-bff/live/match-detail",
+        {"id": selected["id"]},
+    )
+    teams = (detail.get("team1", {}).get("name"), detail.get("team2", {}).get("name"))
+    if not all(teams) or detail.get("status") not in {"MatchNotStart", "MatchIng", "MatchEnded"}:
+        raise RuntimeError("sports match detail is missing teams or status")
+    if detail.get("status") == "MatchIng" and ".m3u8" not in detail.get("playPath", ""):
+        raise RuntimeError("live sports match has no direct HLS stream")
+    return selected_sport, f"{teams[0]} vs {teams[1]}"
+
+
 def primary_subjects(search: dict) -> list[dict]:
     groups = [
         group
@@ -187,6 +244,7 @@ def primary_subjects(search: dict) -> list[dict]:
 
 
 def main() -> int:
+    sports_type, sports_title = validate_sports_journey()
     rails = (
         ("Popular", "All", "Hottest"),
         ("Latest", "All", "Latest"),
@@ -350,7 +408,8 @@ def main() -> int:
     print(
         f"LIVE_ANDROID_API_OK title={details['title']!r} streams={len(streams)} "
         f"qualities={qualities} bytes={delivered_size} "
-        f"rails={','.join(f'{name}:{len(items)}' for name, items in clean_rails.items())}"
+        f"rails={','.join(f'{name}:{len(items)}' for name, items in clean_rails.items())} "
+        f"sports={sports_type}:{sports_title!r}"
     )
     return 0
 
