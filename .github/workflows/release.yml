@@ -69,6 +69,8 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         if: steps.existing.outputs.exists != 'true'
+        with:
+          packages: platform-tools
 
       - uses: gradle/actions/setup-gradle@v4
         if: steps.existing.outputs.exists != 'true'
