@@ -20,7 +20,7 @@ internal class RequestSigner(private val identity: ClientIdentity) {
         private const val SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
         private const val BODY_HASH_LIMIT = 102_400
         private const val VERSION_CODE = 50_020_121
-        private const val VERSION_NAME = "4.0.01.0813.02"
+        private const val VERSION_NAME = "4.0.01.0813.03"
         private const val ACCEPT = "application/json"
         private const val OS_VERSION = "13"
         private const val BRAND = "Redmi"

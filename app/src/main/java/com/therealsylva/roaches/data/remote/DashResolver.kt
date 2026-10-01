@@ -1,8 +1,8 @@
 package com.therealsylva.roaches.data.remote
 
-import android.util.Base64
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 object DashResolver {
     private val NOTICE_MARKERS = listOf(
@@ -22,21 +22,19 @@ object DashResolver {
     fun resolveDashManifestFromPolicy(signCookie: String): String? {
         for (part in signCookie.split(';')) {
             val trimmed = part.trim()
+            if (trimmed.startsWith("Edge-Cache-Cookie=")) {
+                val prefix = trimmed.substringAfter("urlprefix=", "").substringBefore(':')
+                val resource = decodeBase64(prefix.replace('-', '+').replace('_', '/'))
+                resource?.let(::manifestUrl)?.let { return it }
+            }
             if (!trimmed.startsWith("CloudFront-Policy=")) continue
 
-            var policy = trimmed
+            val policy = trimmed
                 .removePrefix("CloudFront-Policy=")
                 .replace('-', '+')
                 .replace('_', '=')
                 .replace('~', '/')
-            val pad = (4 - policy.length % 4) % 4
-            if (pad > 0) policy += "=".repeat(pad)
-
-            val decoded = try {
-                String(Base64.decode(policy, Base64.DEFAULT), StandardCharsets.UTF_8)
-            } catch (_: Exception) {
-                continue
-            }
+            val decoded = decodeBase64(policy) ?: continue
             val json = try {
                 JSONObject(decoded)
             } catch (_: Exception) {
@@ -45,12 +43,22 @@ object DashResolver {
             val resource = json.optJSONArray("Statement")
                 ?.optJSONObject(0)
                 ?.optString("Resource")
-                ?.trimEnd('*', '/')
                 ?: continue
-            if (resource.startsWith("http://") || resource.startsWith("https://")) {
-                return "$resource/index.mpd"
-            }
+            manifestUrl(resource)?.let { return it }
         }
         return null
+    }
+
+    private fun decodeBase64(value: String): String? = runCatching {
+        String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8)
+    }.getOrNull()
+
+    private fun manifestUrl(resource: String): String? {
+        val base = resource.trimEnd('*', '/')
+        return if (base.startsWith("http://") || base.startsWith("https://")) {
+            "$base/index.mpd"
+        } else {
+            null
+        }
     }
 }
