@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 
 
 HOSTS = (
@@ -26,7 +27,7 @@ HOSTS = (
 )
 SPORTS_HOST = "https://h5-sport-api.aoneroom.com"
 SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O"
-VERSION_NAME = "4.0.01.0813.02"
+VERSION_NAME = "4.0.01.0813.03"
 VERSION_CODE = 50_020_121
 USER_AGENT = (
     f"com.community.oneroom/{VERSION_CODE} (Linux; U; Android 13; en_US; "
@@ -97,6 +98,32 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
     return headers
 
 
+def resolve_dash_manifest(sign_cookie: str) -> str | None:
+    for part in sign_cookie.split(";"):
+        part = part.strip()
+        try:
+            if part.startswith("Edge-Cache-Cookie=") and "urlprefix=" in part:
+                encoded = part.split("urlprefix=", 1)[1].split(":", 1)[0]
+                resource = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+            elif part.startswith("CloudFront-Policy="):
+                encoded = part.split("=", 1)[1].translate(str.maketrans("-_~", "+=/"))
+                policy = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4)))
+                resource = policy["Statement"][0]["Resource"]
+            else:
+                continue
+            if resource.startswith(("http://", "https://")):
+                return resource.rstrip("*/") + "/index.mpd"
+        except (ValueError, KeyError, IndexError, UnicodeError):
+            continue
+    return None
+
+
+def is_notice_url(url: str) -> bool:
+    return any(marker in url.lower() for marker in (
+        "macdn.aoneroom.com/other/", "/notice.mp4", "1c7de0bd", "9a0461bc", "b164fbfb",
+    ))
+
+
 def validate_stream_delivery(stream: dict) -> int:
     """Confirm the CDN returns media rather than a forced-update payload."""
     declared_size = next(
@@ -110,18 +137,37 @@ def validate_stream_delivery(stream: dict) -> int:
     if declared_size <= 0:
         raise RuntimeError("playable resource has no declared size")
 
-    resource_link = stream.get("resourceLink")
+    cookie = stream.get("signCookie", "")
+    resource_link = resolve_dash_manifest(cookie) or stream.get("url") or stream.get("resourceLink")
     if not resource_link:
         raise RuntimeError("playable resource has no CDN link")
+    if is_notice_url(resource_link):
+        raise RuntimeError("provider returned a forced-update notice without a playable manifest")
+    headers = {"User-Agent": USER_AGENT, "Referer": "https://sportslive.wine"}
+    if not resource_link.endswith(".mpd"):
+        headers["Range"] = "bytes=0-65535"
+    if cookie:
+        headers["Cookie"] = cookie
     range_request = urllib.request.Request(
         resource_link,
-        headers={"Range": "bytes=0-65535", "User-Agent": USER_AGENT},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(range_request, timeout=30) as response:
-            sample = response.read(65_536)
+            sample = response.read(1_048_577 if resource_link.endswith(".mpd") else 65_536)
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"playable resource returned HTTP {error.code}") from error
+
+    if resource_link.endswith(".mpd"):
+        if len(sample) > 1_048_576:
+            raise RuntimeError("DASH manifest exceeds smoke-test size limit")
+        try:
+            manifest = ET.fromstring(sample)
+        except ET.ParseError as error:
+            raise RuntimeError("CDN did not return a valid DASH manifest") from error
+        if manifest.tag.rsplit("}", 1)[-1] != "MPD" or not manifest.findall(".//{*}Representation"):
+            raise RuntimeError("DASH manifest has no playable representations")
+        return declared_size
 
     media_signature = (
         sample.startswith(b"#EXTM3U")
@@ -386,19 +432,19 @@ def main() -> int:
         season = int(first_season.get("se", first_season.get("season", 1)))
         episode = 1
         season_episode = f"&se={season}&ep={episode}"
-    resources, _ = request(
+    play_info, _ = request(
         "GET",
-        f"/wefeed-mobile-bff/subject-api/resource?subjectId={subject_id}{season_episode}&page=1&perPage=20",
+        f"/wefeed-mobile-bff/subject-api/play-info/v2?subjectId={subject_id}{season_episode}",
         token=token,
     )
-    streams = resources.get("list", resources if isinstance(resources, list) else [])
-    if not details.get("title") or not any(item.get("resourceLink") for item in streams):
+    streams = play_info.get("streams", [])
+    if not details.get("title") or not streams:
         raise RuntimeError("details or playable resources missing")
 
-    qualities = sorted({int(item.get("resolution", 0)) for item in streams if int(item.get("resolution", 0)) > 0}, reverse=True)
-    delivered_size = validate_stream_delivery(
-        max(streams, key=lambda item: int(item.get("resolution", 0)))
-    )
+    qualities = sorted({int(res) for item in streams
+        for res in str(item.get("resolutions", play_info.get("displayResolutions", ""))).split(",")
+        if res.strip().isdigit()}, reverse=True)
+    delivered_size = validate_stream_delivery(streams[0])
     print(
         f"LIVE_ANDROID_API_OK title={details['title']!r} streams={len(streams)} "
         f"qualities={qualities} bytes={delivered_size} "
