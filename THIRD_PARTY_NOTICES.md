@@ -6,7 +6,9 @@ Roaches includes an independent Kotlin port of the MovieBox provider request
 signing and endpoint conventions documented in:
 
 - Project: `mesamirh/MovieBox-Tui`
-- Version reviewed: `0.1.13`
+- Version reviewed: `0.1.13`, plus the stream-recovery endpoint conventions in
+  [PR #208](https://github.com/mesamirh/MovieBox-Tui/pull/208) and
+  [PR #210](https://github.com/mesamirh/MovieBox-Tui/pull/210)
 - Source: <https://github.com/mesamirh/MovieBox-Tui>
 - License: MIT OR Apache-2.0
 

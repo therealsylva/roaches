@@ -592,6 +592,7 @@ class LocalStore(context: Context) {
                 mediaType.externalDirectory(),
                 filenameOverride ?: downloadFileName(media.title, seasonNumber, episodeNumber, source),
             )
+        source.headers.forEach { (name, value) -> request.addRequestHeader(name, value) }
         val downloadId = appContext.getSystemService(DownloadManager::class.java).enqueue(request)
         return DownloadEntry(
             downloadId = downloadId,
