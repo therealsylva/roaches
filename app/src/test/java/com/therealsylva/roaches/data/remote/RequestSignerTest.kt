@@ -83,4 +83,21 @@ class RequestSignerTest {
                     "&se=2&ep=7&page=3&perPage=20",
             )
     }
+
+    @Test
+    fun recoveryQueriesEncodeNestedUrlsAndTargetTheExactEpisode() {
+        val resourceUrl = "https://cdn.example.com/notice.mp4?sign=a+b&t=123&x=hello world"
+        val path = MovieBoxApi.resourcePositionPath("show & id", "resource+1", resourceUrl)
+        val url = ("https://api6.aoneroom.com" + path).toHttpUrl()
+        assertThat(url.queryParameter("subjectId")).isEqualTo("show & id")
+        assertThat(url.queryParameter("resourceId")).isEqualTo("resource+1")
+        assertThat(url.queryParameter("failUrl")).isEqualTo(resourceUrl)
+        assertThat(RequestSigner(identity).canonical("GET", url, null, 123))
+            .contains("failUrl=$resourceUrl&")
+        val exact = ("https://api6.aoneroom.com" + MovieBoxApi.recoveryResourcePath("show & id", 5, 25)).toHttpUrl()
+        assertThat(exact.encodedPath).endsWith("/resource/v2")
+        assertThat(exact.queryParameter("se")).isEqualTo("5")
+        assertThat(exact.queryParameter("epFrom")).isEqualTo("25")
+        assertThat(exact.queryParameter("epTo")).isEqualTo("25")
+    }
 }

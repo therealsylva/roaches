@@ -46,7 +46,9 @@ def signed_headers(method: str, url: str, body: bytes | None, token: str | None)
     timestamp = int(time.time() * 1000)
     parsed = urllib.parse.urlsplit(url)
     query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    sorted_query = urllib.parse.urlencode(sorted(query), doseq=True)
+    # MovieBox signs decoded query values, including nested failUrl parameters.
+    # Match RequestSigner.kt and upstream crypto.rs; re-encoding breaks recovery.
+    sorted_query = "&".join(f"{key}={value}" for key, value in sorted(query, key=lambda pair: pair[0]))
     canonical_url = parsed.path + (f"?{sorted_query}" if sorted_query else "")
     limited = (body or b"")[:102_400]
     canonical = "\n".join(
@@ -111,7 +113,8 @@ def resolve_dash_manifest(sign_cookie: str) -> str | None:
                 resource = policy["Statement"][0]["Resource"]
             else:
                 continue
-            if resource.startswith(("http://", "https://")):
+            parsed = urllib.parse.urlsplit(resource)
+            if safe_media_url(resource) and "/dash/" in parsed.path and not parsed.query and not parsed.fragment:
                 return resource.rstrip("*/") + "/index.mpd"
         except (ValueError, KeyError, IndexError, UnicodeError):
             continue
@@ -124,6 +127,109 @@ def is_notice_url(url: str) -> bool:
     ))
 
 
+def safe_media_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        return (parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+                and not parsed.username and not parsed.password and not is_notice_url(url))
+    except ValueError:
+        return False
+
+
+def unwrap_data(payload):
+    for _ in range(4):
+        if not isinstance(payload, dict) or payload.get("data") is None:
+            break
+        payload = payload["data"]
+    return payload
+
+
+def resource_rows(payload) -> list[dict]:
+    payload = unwrap_data(payload)
+    rows = payload if isinstance(payload, list) else payload.get("list", []) if isinstance(payload, dict) else []
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def matches_target(row: dict, subject_id: str, season: int, episode: int) -> bool:
+    if row.get("subjectId") is not None and str(row["subjectId"]) != subject_id:
+        return False
+    try:
+        declared_season = int(row.get("se", row.get("season", 0 if season == 0 else -1)))
+        declared_episode = int(row.get("ep", row.get("episode", 0 if episode == 0 else -1)))
+    except (ValueError, TypeError):
+        return False
+    return declared_season == season and declared_episode == episode
+
+
+def resolve_playable_streams(subject_id: str, season: int, episode: int, token: str) -> list[dict]:
+    query = urllib.parse.urlencode({"subjectId": subject_id, "se": season, "ep": episode})
+    try:
+        payload, _ = request("GET", f"/wefeed-mobile-bff/subject-api/play-info/v2?{query}", token=token)
+    except RuntimeError:
+        payload = {}
+    primary = []
+    for stream in payload.get("streams", []) if isinstance(payload, dict) else []:
+        url = resolve_dash_manifest(stream.get("signCookie", "")) or stream.get("url", "")
+        if safe_media_url(url):
+            primary.append({**stream, "url": url})
+    if primary:
+        return primary
+
+    exact_query = urllib.parse.urlencode({
+        "subjectId": subject_id, "page": 1, "perPage": 20, "all": 0,
+        "startPosition": 1, "endPosition": 1, "pagerMode": 2, "resolution": 0,
+        "se": season, "epFrom": episode, "epTo": episode, "isVip": "true",
+    })
+    attempted = set()
+    for path in (f"/wefeed-mobile-bff/subject-api/resource/v2?{exact_query}",
+                 f"/wefeed-mobile-bff/subject-api/resource?{query}&page=1&perPage=20"):
+        try:
+            payload, _ = request("GET", path, token=token)
+        except RuntimeError:
+            continue
+        sources = []
+        for original in resource_rows(payload):
+            if not matches_target(original, subject_id, season, episode):
+                continue
+            url = original.get("resourceLink") or original.get("url") or ""
+            if safe_media_url(url):
+                sources.append({**original, "url": url, "_direct_mp4": True})
+                continue
+            resource_id = original.get("resourceId", original.get("id"))
+            if resource_id is None or not url or not is_notice_url(url):
+                continue
+            resource_id = str(resource_id)
+            if resource_id in attempted or len(attempted) >= 6:
+                continue
+            attempted.add(resource_id)
+            recovery_query = urllib.parse.urlencode({
+                "subjectId": subject_id, "resourceId": resource_id, "failUrl": url,
+                "failCode": "404", "resourceNum": "0", "isVip": "true",
+            })
+            try:
+                recovered, _ = request("GET", f"/wefeed-mobile-bff/subject-api/resource-position/v2?{recovery_query}", token=token)
+            except RuntimeError:
+                continue
+            for candidate in resource_rows(recovered)[:4]:
+                if str(candidate.get("resourceId", candidate.get("id"))) != resource_id:
+                    continue
+                if not matches_target(candidate, subject_id, season, episode):
+                    continue
+                link = candidate.get("resourceLink") or candidate.get("url") or ""
+                if not safe_media_url(link):
+                    continue
+                source = {**original, **candidate, "url": link, "_direct_mp4": True}
+                try:
+                    validate_stream_delivery(source)
+                except (RuntimeError, OSError):
+                    continue
+                sources.append(source)
+                break
+        if sources:
+            return sources
+    raise RuntimeError("provider returned no verified playable streams")
+
+
 def validate_stream_delivery(stream: dict) -> int:
     """Confirm the CDN returns media rather than a forced-update payload."""
     declared_size = next(
@@ -134,17 +240,17 @@ def validate_stream_delivery(stream: dict) -> int:
         ),
         0,
     )
-    if declared_size <= 0:
-        raise RuntimeError("playable resource has no declared size")
-
-    cookie = stream.get("signCookie", "")
+    cookie = "" if stream.get("_direct_mp4") else stream.get("signCookie", "")
     resource_link = resolve_dash_manifest(cookie) or stream.get("url") or stream.get("resourceLink")
     if not resource_link:
         raise RuntimeError("playable resource has no CDN link")
     if is_notice_url(resource_link):
         raise RuntimeError("provider returned a forced-update notice without a playable manifest")
-    headers = {"User-Agent": USER_AGENT, "Referer": "https://sportslive.wine"}
-    if not resource_link.endswith(".mpd"):
+    is_dash = urllib.parse.urlsplit(resource_link).path.endswith(".mpd")
+    headers = {"User-Agent": USER_AGENT}
+    if not stream.get("_direct_mp4"):
+        headers["Referer"] = "https://sportslive.wine"
+    if not is_dash:
         headers["Range"] = "bytes=0-65535"
     if cookie:
         headers["Cookie"] = cookie
@@ -154,11 +260,13 @@ def validate_stream_delivery(stream: dict) -> int:
     )
     try:
         with urllib.request.urlopen(range_request, timeout=30) as response:
-            sample = response.read(1_048_577 if resource_link.endswith(".mpd") else 65_536)
+            if not safe_media_url(response.geturl()):
+                raise RuntimeError("CDN redirected to an invalid media target")
+            sample = response.read(1_048_577 if is_dash else 65_536)
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"playable resource returned HTTP {error.code}") from error
 
-    if resource_link.endswith(".mpd"):
+    if is_dash:
         if len(sample) > 1_048_576:
             raise RuntimeError("DASH manifest exceeds smoke-test size limit")
         try:
@@ -197,12 +305,9 @@ def request(method: str, path: str, payload: dict | None = None, token: str | No
                 user = response.headers.get("x-user")
                 next_token = json.loads(user).get("token") if user else token
                 decoded = json.load(response)
-                return decoded.get("data", decoded), next_token
+                return unwrap_data(decoded), next_token
         except urllib.error.HTTPError as error:
-            response_body = error.read(512).decode("utf-8", errors="replace").strip()
-            last_error = RuntimeError(
-                f"{host} returned HTTP {error.code}: {response_body or error.reason}"
-            )
+            last_error = RuntimeError(f"{host} returned HTTP {error.code}")
             if error.code == 429:
                 time.sleep(0.4)
         except (OSError, ValueError) as error:
@@ -379,17 +484,10 @@ def main() -> int:
         f"/wefeed-mobile-bff/subject-api/get?subjectId={spider_man_id}",
         token=token,
     )
-    spider_man_resources, token = request(
-        "GET",
-        f"/wefeed-mobile-bff/subject-api/resource?subjectId={spider_man_id}&page=1&perPage=20",
-        token=token,
-    )
-    spider_man_streams = spider_man_resources.get(
-        "list", spider_man_resources if isinstance(spider_man_resources, list) else []
-    )
+    spider_man_streams = resolve_playable_streams(spider_man_id, 0, 0, token)
     if (
         spider_man_details.get("title", "").lower() != "spider-man: brand new day"
-        or not any(item.get("resourceLink") for item in spider_man_streams)
+        or not spider_man_streams
     ):
         raise RuntimeError("Spider-Man fallback title has no playable mobile resource")
 
@@ -419,7 +517,7 @@ def main() -> int:
         raise RuntimeError("live search returned no Dune title")
     subject_id = urllib.parse.quote(dune["subjectId"])
     details, token = request("GET", f"/wefeed-mobile-bff/subject-api/get?subjectId={subject_id}", token=token)
-    season_episode = ""
+    season, episode = 0, 0
     subject_type = int(details.get("subjectType", details.get("stype", 1)))
     if subject_type == 2:
         seasons, token = request(
@@ -431,20 +529,22 @@ def main() -> int:
         first_season = season_list[0] if season_list else {}
         season = int(first_season.get("se", first_season.get("season", 1)))
         episode = 1
-        season_episode = f"&se={season}&ep={episode}"
-    play_info, _ = request(
-        "GET",
-        f"/wefeed-mobile-bff/subject-api/play-info/v2?subjectId={subject_id}{season_episode}",
-        token=token,
-    )
-    streams = play_info.get("streams", [])
+    streams = resolve_playable_streams(str(dune["subjectId"]), season, episode, token)
     if not details.get("title") or not streams:
         raise RuntimeError("details or playable resources missing")
 
     qualities = sorted({int(res) for item in streams
-        for res in str(item.get("resolutions", play_info.get("displayResolutions", ""))).split(",")
+        for res in str(item.get("resolutions", item.get("resolution", ""))).split(",")
         if res.strip().isdigit()}, reverse=True)
     delivered_size = validate_stream_delivery(streams[0])
+    # Verify actual bytes for later seasons/episodes, not just distinct URL text.
+    episode_urls = []
+    for target_season, target_episode in ((1, 2), (2, 1)):
+        sources = resolve_playable_streams("6207982430134357800", target_season, target_episode, token)
+        validate_stream_delivery(sources[0])
+        episode_urls.append(sources[0]["url"].split("?", 1)[0])
+    if len(set(episode_urls)) != len(episode_urls):
+        raise RuntimeError("different series episodes resolved to the same media file")
     print(
         f"LIVE_ANDROID_API_OK title={details['title']!r} streams={len(streams)} "
         f"qualities={qualities} bytes={delivered_size} "

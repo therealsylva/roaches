@@ -15,6 +15,7 @@ import com.therealsylva.roaches.data.model.StreamSource
 import com.therealsylva.roaches.data.model.SubtitleTrack
 import com.therealsylva.roaches.data.remote.MovieBoxApi
 import com.therealsylva.roaches.data.remote.DashResolver
+import com.therealsylva.roaches.data.remote.RecoveredStreamProbe
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -27,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 class RoachesRepository(private val store: LocalStore) {
     private val settings = store.settings()
     private val api = MovieBoxApi(store.clientIdentity())
+    private val recoveredStreamProbe = RecoveredStreamProbe()
     private val seasonsBySubject = ConcurrentHashMap<String, List<Season>>()
 
     fun cachedDiscover(): List<Shelf> = store.cachedHome(settings.contentRegion)
@@ -166,18 +168,23 @@ class RoachesRepository(private val store: LocalStore) {
         episode: Int,
         languageHint: String? = null,
     ): List<StreamSource> {
-        val dashSources = try {
-            parsePlayInfoSources(api.playInfo(subjectId, season, episode), languageHint)
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (_: Exception) {
-            emptyList()
-        }
-        if (dashSources.isNotEmpty()) {
-            return orderStreamSources(dashSources, settings.playbackQuality, settings.preferredAudio)
-        }
+        val parsed = resolveMovieBoxSources(
+            subjectId = subjectId,
+            season = season,
+            episode = episode,
+            languageHint = languageHint,
+            userAgent = api.userAgent,
+            fetchPlayInfo = { api.playInfo(subjectId, season, episode) },
+            fetchExactResources = { api.recoveryResources(subjectId, season, episode) },
+            fetchLegacyResources = { legacyResourceRows(subjectId, season, episode) },
+            recoverResource = { resourceId, failedUrl -> api.recoverResource(subjectId, resourceId, failedUrl) },
+            verifyRecovered = { recoveredStreamProbe.isMp4(it.url, api.userAgent) },
+        )
+        return orderStreamSources(parsed, settings.playbackQuality, settings.preferredAudio)
+    }
 
-        val rows = if (season > 0 && episode > 0) {
+    private suspend fun legacyResourceRows(subjectId: String, season: Int, episode: Int): List<JSONObject> =
+        if (season > 0 && episode > 0) {
             val startPage = estimatedEpisodePage(
                 seasons = seasonsBySubject[subjectId].orEmpty(),
                 season = season,
@@ -200,10 +207,6 @@ class RoachesRepository(private val store: LocalStore) {
                 parseResourcePage(api.resourcePage(subjectId, page = page))
             }
         }
-        val parsed = parseStreamSources(rows, languageHint)
-            .filterNot { DashResolver.isNoticeUrl(it.url) }
-        return orderStreamSources(parsed, settings.playbackQuality, settings.preferredAudio)
-    }
 
     suspend fun captions(subjectId: String, source: StreamSource): List<SubtitleTrack> {
         if (source.resourceId.isBlank()) return emptyList()
@@ -223,8 +226,7 @@ internal fun parsePlayInfoSources(
     payload: Any?,
     languageHint: String?,
 ): List<StreamSource> {
-    val root = payload as? JSONObject ?: return emptyList()
-    val data = root.optJSONObject("data") ?: root
+    val data = unwrapMovieBoxData(payload) as? JSONObject ?: return emptyList()
     val streams = data.optJSONArray("streams") ?: return emptyList()
 
     return buildList {
@@ -233,7 +235,7 @@ internal fun parsePlayInfoSources(
             val signCookie = stream.string("signCookie", "cookie", "signedCookie")
             val dashUrl = signCookie?.let(DashResolver::resolveDashManifestFromPolicy)
             val directUrl = stream.string("url", "resourceLink", "link", "mpd")
-                ?.takeUnless(DashResolver::isNoticeUrl)
+                ?.takeIf(DashResolver::isMediaUrl)
             val finalUrl = dashUrl ?: directUrl ?: return@repeat
             if (DashResolver.isNoticeUrl(finalUrl)) return@repeat
 
@@ -280,10 +282,11 @@ private const val RESOURCE_PAGE_SIZE = 20
 private val DEFAULT_RESOURCE_RESOLUTIONS = listOf(1080, 720, 480, 360)
 
 internal fun parseResourcePage(payload: Any): ResourcePage {
-    val root = payload as? JSONObject
-    val list = when (payload) {
-        is JSONArray -> payload
-        is JSONObject -> payload.optJSONArray("list") ?: JSONArray()
+    val data = unwrapMovieBoxData(payload)
+    val root = data as? JSONObject
+    val list = when (data) {
+        is JSONArray -> data
+        is JSONObject -> data.optJSONArray("list") ?: JSONArray()
         else -> JSONArray()
     }
     val resolutions = buildList {

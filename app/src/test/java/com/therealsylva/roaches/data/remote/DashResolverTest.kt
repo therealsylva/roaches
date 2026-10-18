@@ -75,4 +75,13 @@ class DashResolverTest {
             .put("signCookie", "Edge-Cache-Cookie=urlprefix=%%%:sign=test"))
         assertThat(parsePlayInfoSources(JSONObject().put("streams", streams), null)).isEmpty()
     }
+
+    @Test
+    fun rejectsHlsPoliciesEvenWhenDashAppearsOnlyInTheQuery() {
+        for (resource in listOf("https://cdn.example.com/hls/item/", "https://cdn.example.com/hls/item?path=/dash/")) {
+            assertThat(DashResolver.resolveDashManifestFromPolicy(edgeCookie(resource))).isNull()
+        }
+        val streams = JSONArray().put(JSONObject().put("url", notice).put("signCookie", edgeCookie("https://cdn.example.com/hls/item/")))
+        assertThat(parsePlayInfoSources(JSONObject().put("streams", streams), null)).isEmpty()
+    }
 }

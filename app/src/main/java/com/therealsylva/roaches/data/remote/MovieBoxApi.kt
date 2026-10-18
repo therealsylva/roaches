@@ -63,6 +63,18 @@ internal class MovieBoxApi(
                 "&se=$season&ep=$episode&page=$page&perPage=20"
         }
 
+        internal fun recoveryResourcePath(subjectId: String, season: Int, episode: Int): String {
+            require((season == 0 && episode == 0) || (season > 0 && episode > 0))
+            return "/wefeed-mobile-bff/subject-api/resource/v2?subjectId=${encodeValue(subjectId)}" +
+                "&page=1&perPage=20&all=0&startPosition=1&endPosition=1&pagerMode=2" +
+                "&resolution=0&se=$season&epFrom=$episode&epTo=$episode&isVip=true"
+        }
+
+        internal fun resourcePositionPath(subjectId: String, resourceId: String, failedUrl: String): String =
+            "/wefeed-mobile-bff/subject-api/resource-position/v2?subjectId=${encodeValue(subjectId)}" +
+                "&resourceId=${encodeValue(resourceId)}&failUrl=${encodeValue(failedUrl)}" +
+                "&failCode=404&resourceNum=0&isVip=true"
+
         private fun encodeValue(value: String): String =
             URLEncoder.encode(value, StandardCharsets.UTF_8.name())
     }
@@ -72,6 +84,14 @@ internal class MovieBoxApi(
     private val token = AtomicReference<String?>(null)
     private val activeHost = AtomicInteger(0)
     private val sessionMutex = Mutex()
+
+    val userAgent: String get() = signer.userAgent
+
+    suspend fun recoveryResources(subjectId: String, season: Int, episode: Int): Any =
+        request("GET", recoveryResourcePath(subjectId, season, episode))
+
+    suspend fun recoverResource(subjectId: String, resourceId: String, failedUrl: String): Any =
+        request("GET", resourcePositionPath(subjectId, resourceId, failedUrl))
 
     suspend fun initialize() {
         ensureSession()

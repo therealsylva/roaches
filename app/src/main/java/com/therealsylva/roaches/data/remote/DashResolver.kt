@@ -1,6 +1,7 @@
 package com.therealsylva.roaches.data.remote
 
 import org.json.JSONObject
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
@@ -17,6 +18,12 @@ object DashResolver {
         if (url.isNullOrBlank()) return true
         val lower = url.lowercase()
         return NOTICE_MARKERS.any(lower::contains)
+    }
+
+    fun isMediaUrl(url: String?): Boolean {
+        if (isNoticeUrl(url)) return false
+        val parsed = url?.toHttpUrlOrNull() ?: return false
+        return parsed.username.isEmpty() && parsed.password.isEmpty()
     }
 
     fun resolveDashManifestFromPolicy(signCookie: String): String? {
@@ -55,10 +62,12 @@ object DashResolver {
 
     private fun manifestUrl(resource: String): String? {
         val base = resource.trimEnd('*', '/')
-        return if (base.startsWith("http://") || base.startsWith("https://")) {
-            "$base/index.mpd"
-        } else {
-            null
-        }
+        val parsed = base.toHttpUrlOrNull() ?: return null
+        // Signed /hls/ prefixes are not hosted as DASH; appending index.mpd
+        // creates a plausible-looking 404 and prevents MP4 recovery.
+        if (!isMediaUrl(base) || !parsed.encodedPath.contains("/dash/") ||
+            parsed.query != null || parsed.fragment != null
+        ) return null
+        return parsed.newBuilder().addPathSegment("index.mpd").build().toString()
     }
 }
