@@ -1,0 +1,36 @@
+name: MovieBox TUI runtime smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/tui-runtime-smoke.yml"
+      - "scripts/smoke_moviebox_tui.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-search:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download pinned upstream release
+        env:
+          RELEASE_URL: https://github.com/mesamirh/MovieBox-Tui/releases/download/v0.1.13
+        run: |
+          curl --fail --location --retry 3 --output SHA256SUMS "$RELEASE_URL/SHA256SUMS"
+          curl --fail --location --retry 3 --output MovieBox_Linux_x64.tar.gz "$RELEASE_URL/MovieBox_Linux_x64.tar.gz"
+          grep ' MovieBox_Linux_x64.tar.gz$' SHA256SUMS | sha256sum --check --strict
+          test "$(sha256sum MovieBox_Linux_x64.tar.gz | cut -d' ' -f1)" = "7caa0b96e91a060d9677135de742e47a26a6b5e58547ce8ebfd25882a1520beb"
+
+      - name: Run release binary
+        run: |
+          mkdir release
+          tar --no-same-owner --directory release --extract --gzip --file MovieBox_Linux_x64.tar.gz
+          test "$(release/moviebox-tui --version)" = "moviebox-tui 0.1.13"
+
+      - name: Verify live MovieBox search
+        run: python3 scripts/smoke_moviebox_tui.py release/moviebox-tui
