@@ -58,6 +58,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.compose.ui.viewinterop.AndroidView
@@ -111,7 +112,7 @@ fun PlayerScreen(
             .setDefaultRequestProperties(source.headers)
             .setAllowCrossProtocolRedirects(true)
         val mediaSourceFactory = DefaultMediaSourceFactory(context)
-            .setDataSourceFactory(httpFactory)
+            .setDataSourceFactory(DefaultDataSource.Factory(context, httpFactory))
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
