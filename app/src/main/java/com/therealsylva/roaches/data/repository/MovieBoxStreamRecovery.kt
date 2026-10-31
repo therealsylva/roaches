@@ -8,6 +8,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
 
 /** Keep the API envelope handling identical for listings and recovered resources. */
@@ -35,6 +36,7 @@ internal suspend fun resolveMovieBoxSources(
     verifyRecovered: suspend (StreamSource) -> Boolean,
     maxRecoveries: Int = 6,
     recoveryTimeoutMs: Long = 20_000,
+    fetchSubjectDetails: suspend () -> Any = { JSONObject() },
 ): List<StreamSource> {
     require((season == 0 && episode == 0) || (season > 0 && episode > 0))
     val firstFailure = AtomicReference<Exception?>(null)
@@ -47,7 +49,20 @@ internal suspend fun resolveMovieBoxSources(
         null
     }
 
-    val primary = attempt { parsePlayInfoSources(fetchPlayInfo(), languageHint) }.orEmpty()
+    var placeholderFound = false
+    val (subjectDetails, playInfoPayload) = coroutineScope {
+        val detailsTask = async { attempt { fetchSubjectDetails() } }
+        val playInfoTask = async { attempt { fetchPlayInfo() } }
+        detailsTask.await() to playInfoTask.await()
+    }
+    placeholderFound = containsMovieBoxNotice(subjectDetails) || containsMovieBoxNotice(playInfoPayload)
+
+    val detectorSources = subjectDetails?.let {
+        parseMovieBoxDetectorSources(it, subjectId, season, episode, languageHint, userAgent)
+    }.orEmpty()
+    if (detectorSources.isNotEmpty()) return detectorSources
+
+    val primary = playInfoPayload?.let { parsePlayInfoSources(it, languageHint) }.orEmpty()
     if (primary.isNotEmpty()) return primary
 
     var remaining = maxRecoveries.coerceIn(0, 12)
@@ -58,6 +73,7 @@ internal suspend fun resolveMovieBoxSources(
         val direct = parseStreamSources(matching, languageHint)
             .filter { DashResolver.isMediaUrl(it.url) }
             .map { it.copy(headers = mapOf("User-Agent" to userAgent)) }
+        placeholderFound = placeholderFound || matching.any(::containsMovieBoxNotice)
         val notices = matching.filter { row ->
             val id = row.recoveryId()
             val url = row.recoveryUrl()
@@ -98,15 +114,94 @@ internal suspend fun resolveMovieBoxSources(
         return (direct + recovered).distinctBy { it.resourceId to it.url }
     }
 
-    val exactRows = attempt { parseResourcePage(fetchExactResources()).items }.orEmpty()
+    val exactPayload = attempt { fetchExactResources() }
+    placeholderFound = placeholderFound || containsMovieBoxNotice(exactPayload)
+    val exactRows = exactPayload?.let { parseResourcePage(it).items }.orEmpty()
     val exact = resolveRows(exactRows)
     if (exact.isNotEmpty()) return exact
 
     // HTTP 200 with empty, malformed or wrong-episode rows also falls back.
-    val legacy = resolveRows(attempt { fetchLegacyResources() }.orEmpty())
+    val legacyRows = attempt { fetchLegacyResources() }.orEmpty()
+    placeholderFound = placeholderFound || legacyRows.any(::containsMovieBoxNotice)
+    val legacy = resolveRows(legacyRows)
     if (legacy.isNotEmpty()) return legacy
+    if (placeholderFound) throw IOException("MovieBox is serving a placeholder clip instead of this title. Try again later.")
     firstFailure.get()?.let { throw it }
     return emptyList()
+}
+
+internal fun parseMovieBoxDetectorSources(
+    payload: Any?,
+    subjectId: String,
+    season: Int,
+    episode: Int,
+    languageHint: String?,
+    userAgent: String,
+): List<StreamSource> {
+    val data = unwrapMovieBoxData(payload) as? JSONObject ?: return emptyList()
+    val detectors = data.optJSONArray("resourceDetectors") ?: return emptyList()
+    val title = data.optString("title").takeIf { it.isNotBlank() && it != "null" }
+    val rows = buildList {
+        for (detectorIndex in 0 until detectors.length()) {
+            val detector = detectors.optJSONObject(detectorIndex) ?: continue
+            val resolutions = detector.optJSONArray("resolutionList")
+            if (resolutions != null && resolutions.length() > 0) {
+                for (resolutionIndex in 0 until resolutions.length()) {
+                    val row = resolutions.optJSONObject(resolutionIndex) ?: continue
+                    add(row)
+                }
+                continue
+            }
+
+            val downloadUrl = detector.optString("downloadUrl")
+                .takeIf { it.isNotBlank() && it != "null" }
+                ?: continue
+            val row = JSONObject()
+                .put("resourceLink", downloadUrl)
+                .put("se", 0)
+                .put("ep", 0)
+            title?.let { row.put("title", it) }
+            listOf(
+                "firstSize" to "size",
+                "codecName" to "codecName",
+                "resourceId" to "resourceId",
+                "uploadBy" to "uploadBy",
+            ).forEach { (from, to) ->
+                val value = detector.opt(from)
+                if (value != null && value != JSONObject.NULL) row.put(to, value)
+            }
+            resolutionFromSourceLink(detector.optString("resourceLink"))?.let {
+                row.put("resolution", it)
+            }
+            add(row)
+        }
+    }
+
+    return parseStreamSources(
+        rows.filter { it.matchesRecoveryTarget(subjectId, season, episode) },
+        languageHint,
+    )
+        .filter { DashResolver.isMediaUrl(it.url) }
+        .map { it.copy(headers = mapOf("User-Agent" to userAgent)) }
+        .distinctBy { it.resourceId to it.url }
+}
+
+private fun resolutionFromSourceLink(link: String): Int? =
+    Regex("([0-9]{3,4})[pP]")
+        .find(link)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toIntOrNull()
+
+private fun containsMovieBoxNotice(payload: Any?): Boolean {
+    val data = unwrapMovieBoxData(payload)
+    fun contains(value: Any?): Boolean = when (value) {
+        is String -> value.isNotBlank() && DashResolver.isNoticeUrl(value)
+        is JSONObject -> value.keys().asSequence().any { key -> contains(value.opt(key)) }
+        is JSONArray -> (0 until value.length()).any { index -> contains(value.opt(index)) }
+        else -> false
+    }
+    return contains(data)
 }
 
 private fun recoveredStreamSource(
