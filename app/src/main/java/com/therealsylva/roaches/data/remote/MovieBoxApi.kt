@@ -134,10 +134,15 @@ internal class MovieBoxApi(
         return request("POST", "/wefeed-mobile-bff/subject-api/list", body)
     }
 
-    suspend fun details(subjectId: String): JSONObject {
+    suspend fun subjectDetails(subjectId: String): JSONObject {
         val encoded = encode(subjectId)
         val payload = request("GET", "/wefeed-mobile-bff/subject-api/get?subjectId=$encoded")
-        val details = payload as? JSONObject ?: JSONObject()
+        return payload as? JSONObject ?: JSONObject()
+    }
+
+    suspend fun details(subjectId: String): JSONObject {
+        val encoded = encode(subjectId)
+        val details = subjectDetails(subjectId)
         val type = details.optInt("subjectType", details.optInt("stype", 1))
         if (type == 2) {
             runCatching {
