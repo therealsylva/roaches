@@ -175,6 +175,7 @@ class RoachesRepository(private val store: LocalStore) {
             languageHint = languageHint,
             userAgent = api.userAgent,
             fetchPlayInfo = { api.playInfo(subjectId, season, episode) },
+            fetchSubjectDetails = { api.subjectDetails(subjectId) },
             fetchExactResources = { api.recoveryResources(subjectId, season, episode) },
             fetchLegacyResources = { legacyResourceRows(subjectId, season, episode) },
             recoverResource = { resourceId, failedUrl -> api.recoverResource(subjectId, resourceId, failedUrl) },
